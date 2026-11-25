@@ -2,7 +2,10 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use iq_research_workbench::ai::start_chat;
 use iq_research_workbench::{
-    analyze_iq, analyze_trace, create_manifest, scan_source_tree, simulate_qubit, verify_manifest,
+    AssessmentInput, analyze_iq, analyze_trace, assess_engagement, audit_to_sarif,
+    create_manifest, create_scope_file, export_html_report, export_markdown_report,
+    export_sarif_report, generate_demo_workspace, launch_gui, scan_source_tree, simulate_qubit,
+    verify_audit_ledger, verify_manifest, verify_scope_file,
 };
 use serde_json::Value;
 use std::io::{self, Write};
@@ -12,7 +15,7 @@ use std::path::{Path, PathBuf};
 #[command(
     name = "iq-workbench",
     version,
-    about = "Offline workbench for IQ, evidence, physical traces, source review, and quantum education"
+    about = "Authorized offline hardware red-team, IQ, physical trace, and evidence workbench"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -21,6 +24,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Analyze an IQ capture (.csv, .npy, .cf32, .cs8, .cu8) for RF impairments, spurs, and bursts
     Analyze {
         iq_file: PathBuf,
         #[arg(long)]
@@ -28,6 +32,7 @@ enum Command {
         #[command(flatten)]
         output: OutputArg,
     },
+    /// Screen a physical measurement trace (.csv) for glitches, periodicity, drift, and Welch t-stat
     Physical {
         trace: PathBuf,
         #[arg(long)]
@@ -37,15 +42,43 @@ enum Command {
         #[command(flatten)]
         output: OutputArg,
     },
+    /// Create or verify a SHA-256 evidence manifest
     Forensic {
         #[command(subcommand)]
         command: ForensicCommand,
     },
+    /// Static read-only scan of hardware/firmware configs and source code
     Audit {
         root: PathBuf,
+        #[arg(long)]
+        sarif: Option<PathBuf>,
         #[command(flatten)]
         output: OutputArg,
     },
+    /// Manage legal authorization scope files
+    Scope {
+        #[command(subcommand)]
+        command: ScopeCommand,
+    },
+    /// Run a unified hardware red-team assessment across IQ, physical trace, and source code
+    Assess(Box<AssessArgs>),
+    /// Verify a tamper-evident SHA-256 audit ledger (.jsonl)
+    Ledger {
+        ledger: PathBuf,
+    },
+    /// Generate legal synthetic lab demo files for testing CLI & GUI
+    Sample {
+        #[arg(long, default_value = "./demo_lab")]
+        output_dir: PathBuf,
+    },
+    /// Launch the local browser-based graphical workbench (bound to 127.0.0.1)
+    Gui {
+        #[arg(long, default_value_t = 8420)]
+        port: u16,
+        #[arg(long)]
+        no_open: bool,
+    },
+    /// Educational single-qubit state-vector simulator
     Quantum {
         #[arg(long, default_value = "")]
         gates: String,
@@ -56,6 +89,7 @@ enum Command {
         #[command(flatten)]
         output: OutputArg,
     },
+    /// Discuss a saved JSON report with an optional AI provider
     Chat(ChatArgs),
 }
 
@@ -78,6 +112,48 @@ enum ForensicCommand {
         #[command(flatten)]
         output: OutputArg,
     },
+}
+
+#[derive(Subcommand)]
+enum ScopeCommand {
+    Init {
+        path: PathBuf,
+        #[arg(long, default_value = "ENG-2026-001")]
+        engagement_id: String,
+        #[arg(long, default_value = "authorized-analyst")]
+        operator: String,
+    },
+    Verify {
+        path: PathBuf,
+    },
+}
+
+#[derive(Args)]
+struct AssessArgs {
+    #[arg(long)]
+    iq: Option<PathBuf>,
+    #[arg(long)]
+    sample_rate: Option<f64>,
+    #[arg(long)]
+    physical: Option<PathBuf>,
+    #[arg(long)]
+    reference: Option<PathBuf>,
+    #[arg(long, default_value_t = 6.0)]
+    threshold: f64,
+    #[arg(long)]
+    source: Option<PathBuf>,
+    #[arg(long)]
+    scope: Option<PathBuf>,
+    #[arg(long)]
+    ledger: Option<PathBuf>,
+    #[arg(long)]
+    html: Option<PathBuf>,
+    #[arg(long)]
+    markdown: Option<PathBuf>,
+    #[arg(long)]
+    sarif: Option<PathBuf>,
+    #[command(flatten)]
+    output: OutputArg,
 }
 
 #[derive(Args)]
@@ -107,7 +183,10 @@ fn ensure_output_distinct(output: &Option<PathBuf>, inputs: &[&Path]) -> Result<
 }
 
 fn ensure_output_outside(output: &Option<PathBuf>, root: &Path) -> Result<()> {
-    if output.is_some_and(|output| absolute_path(&output).starts_with(absolute_path(root))) {
+    if output
+        .as_ref()
+        .is_some_and(|output| absolute_path(output).starts_with(absolute_path(root)))
+    {
         bail!("Save the report outside the scanned/evidence directory.");
     }
     Ok(())
@@ -180,10 +259,57 @@ fn dispatch(command: Command) -> Result<()> {
                 write_report(verify_manifest(&root, &manifest)?, output.output.as_deref())
             }
         },
-        Command::Audit { root, output } => {
+        Command::Audit {
+            root,
+            sarif,
+            output,
+        } => {
             ensure_output_outside(&output.output, &root)?;
-            write_report(scan_source_tree(&root)?, output.output.as_deref())
+            ensure_output_outside(&sarif, &root)?;
+            let report = scan_source_tree(&root)?;
+            if let Some(sarif_path) = sarif.as_deref() {
+                let sarif_doc = audit_to_sarif(&report)?;
+                std::fs::write(sarif_path, format!("{}\n", serde_json::to_string_pretty(&sarif_doc)?))?;
+                println!("SARIF report written to {}", sarif_path.display());
+            }
+            write_report(report, output.output.as_deref())
         }
+        Command::Scope { command } => match command {
+            ScopeCommand::Init {
+                path,
+                engagement_id,
+                operator,
+            } => write_report(create_scope_file(&path, &engagement_id, &operator)?, None),
+            ScopeCommand::Verify { path } => write_report(verify_scope_file(&path)?, None),
+        },
+        Command::Assess(args) => {
+            let report = assess_engagement(&AssessmentInput {
+                iq_file: args.iq,
+                sample_rate_hz: args.sample_rate,
+                physical_trace: args.physical,
+                physical_reference: args.reference,
+                physical_threshold: args.threshold,
+                source_dir: args.source,
+                scope_file: args.scope,
+                ledger_file: args.ledger,
+            })?;
+            if let Some(html_path) = args.html.as_deref() {
+                export_html_report(&report, html_path)?;
+                println!("HTML report written to {}", html_path.display());
+            }
+            if let Some(md_path) = args.markdown.as_deref() {
+                export_markdown_report(&report, md_path)?;
+                println!("Markdown report written to {}", md_path.display());
+            }
+            if let Some(sarif_path) = args.sarif.as_deref() {
+                export_sarif_report(&report, sarif_path)?;
+                println!("SARIF report written to {}", sarif_path.display());
+            }
+            write_report(report, args.output.output.as_deref())
+        }
+        Command::Ledger { ledger } => write_report(verify_audit_ledger(&ledger)?, None),
+        Command::Sample { output_dir } => write_report(generate_demo_workspace(&output_dir)?, None),
+        Command::Gui { port, no_open } => launch_gui(port, !no_open),
         Command::Quantum {
             gates,
             theta,
@@ -224,14 +350,16 @@ fn prompt(label: &str) -> Result<String> {
 fn menu() -> Result<()> {
     loop {
         println!(
-            "\nIQ Research Workbench (Rust)\n\
+            "\nIQ Hardware Red-Team Workbench (Authorized Offline Mode)\n\
              1) IQ capture analysis\n\
              2) Physical measurement trace\n\
              3) Create evidence manifest\n\
              4) Verify evidence manifest\n\
-             5) Local source review\n\
+             5) Hardware/Firmware source review\n\
              6) Educational qubit simulation\n\
              7) Ask AI about a report\n\
+             8) Launch Graphical Workbench (GUI)\n\
+             9) Generate demo lab dataset\n\
              0) Exit"
         );
         let choice = prompt("Choose: ")?;
@@ -241,7 +369,7 @@ fn menu() -> Result<()> {
         let result = (|| -> Result<()> {
             let result = match choice.as_str() {
                 "1" => {
-                    let path = PathBuf::from(prompt("IQ CSV/NPY path: ")?);
+                    let path = PathBuf::from(prompt("IQ CSV/NPY/CF32/CS8/CU8 path: ")?);
                     let rate = prompt("Sample rate in Hz (optional): ")?;
                     let rate = if rate.is_empty() {
                         None
@@ -286,6 +414,7 @@ fn menu() -> Result<()> {
                 }
                 "5" => dispatch(Command::Audit {
                     root: PathBuf::from(prompt("Local source directory: ")?),
+                    sarif: None,
                     output: OutputArg { output: None },
                 }),
                 "6" => {
@@ -315,6 +444,20 @@ fn menu() -> Result<()> {
                         model: None,
                         base_url: None,
                     }))
+                }
+                "8" => dispatch(Command::Gui {
+                    port: 8420,
+                    no_open: false,
+                }),
+                "9" => {
+                    let dir = prompt("Demo output directory [./demo_lab]: ")?;
+                    dispatch(Command::Sample {
+                        output_dir: if dir.is_empty() {
+                            PathBuf::from("./demo_lab")
+                        } else {
+                            PathBuf::from(dir)
+                        },
+                    })
                 }
                 _ => {
                     println!("Choose one of the listed options.");
