@@ -1,6 +1,6 @@
 use crate::common::{median, sha256_file, spectral_flatness};
 use anyhow::{Context, Result, bail};
-use ndarray::{ArrayD, linalg};
+use ndarray::ArrayD;
 use ndarray_npy::read_npy;
 use num_complex::{Complex32, Complex64};
 use rustfft::FftPlanner;
@@ -185,28 +185,6 @@ fn load_iq(path: &Path) -> Result<Vec<Complex64>> {
         bail!("IQ input contains non-finite values or magnitudes outside the supported range.");
     }
     Ok(samples)
-}
-fn wav_iq(path: &Path, sample_rate: Option<f64>) -> Result<Vec<Complex64>> {
-    let spec = wav::read_wav(path).context("Failed to read WAV file")?;
-    let samples = spec.samples;
-    Ok(samples)
-}
-fn iq_wav(samples: &[Complex64], sample_rate: Option<f64>) -> Result<Vec<Complex64>> {
-    let spec = wav::WavHeader {
-        channels: 2,
-        sample_rate: 48000,
-        sample_format: wav::SampleFormat::I16,
-    };
-    let wav_writer = fs::File::create(path)?;
-    wav::write(spec, wav_writer, &samples[..])?;
-    Ok(())
-    let normalized: Vec<Complex64> = samples
-        .iter()
-        .map(|sample| *sample / scale)
-        .collect();
-    let correlation = linalg::correlate(&normalized, &normalized);
-    
-    
 }
 
 fn compute_iq_impairments(normalized: &[Complex64], mean: Complex64) -> (f64, f64, f64, f64) {
@@ -710,30 +688,5 @@ mod tests {
     fn rejects_invalid_sample_rate() {
         let samples = vec![Complex64::new(1.0, 0.0); 4];
         assert!(analyze_samples(&samples, Some(0.0)).is_err());
-    }
-    fn temp_dir() -> tempfile::TempDir {
-        let root = std::env::temp_dir().join(format!(
-            "iq-workbench-signal-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&root).unwrap();
-        root
-    }
-    fn temp_wav_file(samples: &[Complex64]) -> Result<(PathBuf, PathBuf)> {
-        let root = temp_dir();
-        let spec = wav::WavHeader {
-            channels: 2,
-            sample_rate: 48000,
-            sample_format: wav::SampleFormat::I16,
-        };
-        let file_path = root.join("test.wav");
-        let spec_path = root.join("test.wav.spec.json");
-        let wav_writer = fs::File::create(&file_path)?;
-        wav::write(spec, wav_writer, &samples[..])?;
-        Ok((file_path, spec_path))
     }
 }
