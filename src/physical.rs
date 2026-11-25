@@ -86,9 +86,23 @@ fn moments(values: &[f64], mean: f64) -> (f64, f64, f64) {
     (std_dev, m3, m4 - 3.0)
 }
 
-fn screen_periodicity(values: &[f64], mean: f64) -> (Option<f64>, f64, f64, Vec<[f64; 2]>) {
+struct PeriodicityResult {
+    dominant_period: Option<f64>,
+    periodic_power_ratio: f64,
+    flatness: f64,
+    harmonic_comb_count: usize,
+    spectrum_bins: Vec<[f64; 2]>,
+}
+
+fn screen_periodicity(values: &[f64], mean: f64) -> PeriodicityResult {
     if values.len() < 8 {
-        return (None, 0.0, 1.0, Vec::new());
+        return PeriodicityResult {
+            dominant_period: None,
+            periodic_power_ratio: 0.0,
+            flatness: 1.0,
+            harmonic_comb_count: 0,
+            spectrum_bins: Vec::new(),
+        };
     }
     let mut buf: Vec<Complex64> = values
         .iter()
@@ -100,16 +114,32 @@ fn screen_periodicity(values: &[f64], mean: f64) -> (Option<f64>, f64, f64, Vec<
     let ac_power: Vec<f64> = (1..=half).map(|k| buf[k].norm_sqr()).collect();
     let total_ac: f64 = ac_power.iter().sum();
     if total_ac <= 1e-18 || ac_power.is_empty() {
-        return (None, 0.0, 1.0, Vec::new());
+        return PeriodicityResult {
+            dominant_period: None,
+            periodic_power_ratio: 0.0,
+            flatness: 1.0,
+            harmonic_comb_count: 0,
+            spectrum_bins: Vec::new(),
+        };
     }
     let (best_idx, &best_pow) = ac_power
         .iter()
         .enumerate()
         .max_by(|a, b| a.1.total_cmp(b.1))
         .unwrap();
-    let period = buf.len() as f64 / (best_idx + 1) as f64;
+    let fundamental_bin = best_idx + 1;
+    let period = buf.len() as f64 / fundamental_bin as f64;
     let ratio = best_pow / total_ac;
     let flatness = spectral_flatness(&ac_power);
+
+    let noise_floor = median(&ac_power).max(1e-24);
+    let mut comb_count = 0_usize;
+    for mult in 2..=5 {
+        let h_bin = fundamental_bin * mult;
+        if h_bin >= 1 && h_bin <= ac_power.len() && ac_power[h_bin - 1] > noise_floor * 8.0 {
+            comb_count += 1;
+        }
+    }
 
     let max_p = best_pow.max(1e-24);
     let step = (ac_power.len() / 160).max(1);
@@ -125,7 +155,13 @@ fn screen_periodicity(values: &[f64], mean: f64) -> (Option<f64>, f64, f64, Vec<
         })
         .collect();
 
-    (Some(period), ratio, flatness, spectrum_bins)
+    PeriodicityResult {
+        dominant_period: Some(period),
+        periodic_power_ratio: ratio,
+        flatness,
+        harmonic_comb_count: comb_count,
+        spectrum_bins,
+    }
 }
 
 fn autocorrelation_peak(values: &[f64], mean: f64) -> (Option<usize>, f64) {
@@ -149,6 +185,29 @@ fn autocorrelation_peak(values: &[f64], mean: f64) -> (Option<usize>, f64) {
         }
     }
     (best_lag, best_r.clamp(-1.0, 1.0))
+}
+
+fn rolling_variance_burst_ratio(values: &[f64]) -> f64 {
+    let n = values.len();
+    if n < 24 {
+        return 1.0;
+    }
+    let win = (n / 20).clamp(6, 256);
+    let mut vars = Vec::new();
+    for chunk in values.chunks(win) {
+        if chunk.len() < 3 {
+            continue;
+        }
+        let m = chunk.iter().sum::<f64>() / chunk.len() as f64;
+        let v = chunk.iter().map(|x| (x - m).powi(2)).sum::<f64>() / chunk.len() as f64;
+        vars.push(v);
+    }
+    if vars.is_empty() {
+        return 1.0;
+    }
+    let med = median(&vars);
+    let max_v = vars.iter().copied().fold(0.0_f64, f64::max);
+    if med > 1e-15 { max_v / med } else { 1.0 }
 }
 
 fn detect_step_changes(values: &[f64], scale_sigma: f64) -> (usize, Option<usize>, f64) {
@@ -259,9 +318,9 @@ pub fn analyze_trace(path: &Path, reference_path: Option<&Path>, threshold: f64)
     let peak_abs = values.iter().map(|value| value.abs()).fold(0.0, f64::max);
     let crest_factor = if trace_rms > 0.0 { peak_abs / trace_rms } else { 0.0 };
 
-    let (dominant_period, periodic_power_ratio, flatness, spectrum_bins) =
-        screen_periodicity(&values, mean);
+    let per = screen_periodicity(&values, mean);
     let (autocorr_lag, autocorr_peak) = autocorrelation_peak(&values, mean);
+    let variance_burst_ratio = rolling_variance_burst_ratio(&values);
     let scale_for_shift = if robust_sigma > 0.0 { robust_sigma } else { std_dev };
     let (change_point_count, max_shift_idx, max_shift_sigma) =
         detect_step_changes(&values, scale_for_shift);
@@ -272,12 +331,12 @@ pub fn analyze_trace(path: &Path, reference_path: Option<&Path>, threshold: f64)
         anomaly_flags.push("transient-glitch-outliers");
         anomaly_score += if outliers > 5 { 30 } else { 20 };
     }
-    if periodic_power_ratio > 0.35 || autocorr_peak > 0.65 {
+    if per.periodic_power_ratio > 0.35 || autocorr_peak > 0.65 || per.harmonic_comb_count >= 2 {
         anomaly_flags.push("strong-periodic-clock-leakage");
         anomaly_score += 25;
     }
-    if change_point_count > 0 {
-        anomaly_flags.push("baseline-step-shift-or-drift");
+    if change_point_count > 0 || variance_burst_ratio > 6.0 {
+        anomaly_flags.push("baseline-step-shift-or-localized-activity-burst");
         anomaly_score += 20;
     }
     if excess_kurtosis.abs() > 5.0 {
@@ -296,7 +355,7 @@ pub fn analyze_trace(path: &Path, reference_path: Option<&Path>, threshold: f64)
     outlier_indices.truncate(50);
 
     let mut report = json!({
-        "schema_version": 3,
+        "schema_version": 4,
         "analysis": "offline_physical_measurement_trace",
         "input": {
             "name": path.file_name().unwrap_or_default().to_string_lossy(),
@@ -317,11 +376,13 @@ pub fn analyze_trace(path: &Path, reference_path: Option<&Path>, threshold: f64)
             "robust_outlier_threshold": threshold,
             "robust_outlier_count": outliers,
             "robust_outlier_fraction": outliers as f64 / values.len() as f64,
-            "dominant_period_samples": dominant_period,
-            "periodic_power_ratio": periodic_power_ratio,
+            "dominant_period_samples": per.dominant_period,
+            "periodic_power_ratio": per.periodic_power_ratio,
+            "harmonic_comb_count": per.harmonic_comb_count,
             "autocorrelation_lag": autocorr_lag,
             "autocorrelation_peak": autocorr_peak,
-            "spectral_flatness": flatness,
+            "variance_burst_ratio": variance_burst_ratio,
+            "spectral_flatness": per.flatness,
             "change_point_count": change_point_count,
             "max_shift_index": max_shift_idx,
             "max_shift_sigma": max_shift_sigma,
@@ -332,11 +393,11 @@ pub fn analyze_trace(path: &Path, reference_path: Option<&Path>, threshold: f64)
         "preview": {
             "waveform": waveform_preview,
             "outlier_indices": outlier_indices,
-            "spectrum_bins": spectrum_bins
+            "spectrum_bins": per.spectrum_bins
         },
         "observations": [
             format!("Found {outliers} robust statistical outlier(s) using a {threshold:.2} scaled-MAD threshold."),
-            format!("Periodic power ratio: {:.2}% (autocorrelation peak {:.2}); step-change windows: {change_point_count}.", periodic_power_ratio * 100.0, autocorr_peak)
+            format!("Periodic power ratio: {:.2}% (autocorr {:.2}, harmonic comb {}); variance burst ratio: {:.2}x.", per.periodic_power_ratio * 100.0, autocorr_peak, per.harmonic_comb_count, variance_burst_ratio)
         ],
         "limitations": [
             "This is a generic measurement-trace screen, not proof of a hardware exploit.",

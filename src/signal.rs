@@ -255,6 +255,120 @@ fn envelope_and_phase_profile(normalized: &[Complex64]) -> (f64, f64, &'static s
     (env_kurtosis, phase_diff_rms, character)
 }
 
+/// Welch overlapped averaged PSD (50% overlap, Hann window) for variance-reduced noise floor & spur clarity.
+fn welch_psd(normalized: &[Complex64], mean: Complex64, sample_rate: Option<f64>) -> (Vec<f64>, Vec<f64>, usize) {
+    let n = normalized.len();
+    let seg_len = if n >= 256 {
+        (n / 4).clamp(64, 4096)
+    } else {
+        n
+    };
+    let hop = (seg_len / 2).max(1);
+    let mut planner = FftPlanner::<f64>::new();
+    let fft = planner.plan_fft_forward(seg_len);
+    let mut acc = vec![0.0_f64; seg_len];
+    let mut segments = 0_usize;
+
+    let mut start = 0;
+    while start + seg_len <= n {
+        let mut buf: Vec<Complex64> = normalized[start..start + seg_len]
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let w = if seg_len > 1 {
+                    0.5 * (1.0 - (2.0 * PI * i as f64 / (seg_len - 1) as f64).cos())
+                } else {
+                    1.0
+                };
+                (*v - mean) * w
+            })
+            .collect();
+        fft.process(&mut buf);
+        for (k, c) in buf.iter().enumerate() {
+            acc[k] += c.norm_sqr();
+        }
+        segments += 1;
+        if seg_len == n {
+            break;
+        }
+        start += hop;
+    }
+    if segments > 0 {
+        for v in &mut acc {
+            *v /= segments as f64;
+        }
+    }
+
+    let shift = seg_len.div_ceil(2);
+    let mut power = Vec::with_capacity(seg_len);
+    let mut freqs = Vec::with_capacity(seg_len);
+    for idx in 0..seg_len {
+        let orig = (idx + shift) % seg_len;
+        power.push(acc[orig]);
+        let signed = if orig < shift {
+            orig as isize
+        } else {
+            orig as isize - seg_len as isize
+        };
+        freqs.push(if let Some(rate) = sample_rate {
+            signed as f64 * rate / seg_len as f64
+        } else {
+            signed as f64 / seg_len as f64
+        });
+    }
+    (power, freqs, segments.max(1))
+}
+
+/// CA-CFAR adaptive spur/emitter detector comparing each bin to surrounding training cells.
+fn cfar_detect_spurs(power: &[f64], freqs: &[f64], unit: &str) -> Vec<Value> {
+    let n = power.len();
+    if n < 24 {
+        return Vec::new();
+    }
+    let guard = 2_usize;
+    let train = (n / 16).clamp(4, 16);
+    let max_p = power.iter().copied().fold(0.0_f64, f64::max).max(1e-24);
+    let mut spurs = Vec::new();
+
+    for i in 0..n {
+        let mut sum = 0.0;
+        let mut cnt = 0_usize;
+        for offset in (guard + 1)..=(guard + train) {
+            if let Some(left) = i.checked_sub(offset) {
+                sum += power[left];
+                cnt += 1;
+            }
+            if i + offset < n {
+                sum += power[i + offset];
+                cnt += 1;
+            }
+        }
+        if cnt == 0 {
+            continue;
+        }
+        let local_noise = (sum / cnt as f64).max(1e-24);
+        let snr_local_db = 10.0 * (power[i] / local_noise).log10();
+        let is_local_max = power[i] >= power[(i + n - 1) % n] && power[i] > power[(i + 1) % n];
+        if is_local_max && snr_local_db > 10.0 && (power[i] / max_p) > 1e-4 {
+            spurs.push((i, snr_local_db));
+        }
+    }
+
+    spurs.sort_by(|a, b| b.1.total_cmp(&a.1));
+    spurs.truncate(8);
+    spurs
+        .into_iter()
+        .map(|(idx, snr_db)| {
+            json!({
+                "frequency": freqs[idx],
+                "unit": unit,
+                "local_cfar_snr_db": snr_db,
+                "relative_db": 10.0 * (power[idx] / max_p).max(1e-12).log10()
+            })
+        })
+        .collect()
+}
+
 fn detect_bursts(normalized: &[Complex64]) -> (usize, Vec<Value>) {
     let n = normalized.len();
     if n < 16 {
@@ -527,6 +641,14 @@ pub fn analyze_samples(samples: &[Complex64], sample_rate: Option<f64>) -> Resul
     let flatness = spectral_flatness(&power);
     let obw = occupied_bandwidth(&power, &frequencies);
 
+    let (welch_power, welch_freqs, welch_segments) = welch_psd(&normalized, mean, sample_rate);
+    let unit = if sample_rate.is_some() {
+        "Hz"
+    } else {
+        "cycles/sample"
+    };
+    let cfar_spurs = cfar_detect_spurs(&welch_power, &welch_freqs, unit);
+
     let entropy = if total_power > 0.0 {
         -power
             .iter()
@@ -538,11 +660,6 @@ pub fn analyze_samples(samples: &[Complex64], sample_rate: Option<f64>) -> Resul
             .sum::<f64>()
     } else {
         0.0
-    };
-    let unit = if sample_rate.is_some() {
-        "Hz"
-    } else {
-        "cycles/sample"
     };
     let spectral_peaks: Vec<Value> = peak_indices
         .iter()
@@ -572,7 +689,7 @@ pub fn analyze_samples(samples: &[Complex64], sample_rate: Option<f64>) -> Resul
         anomaly_flags.push("iq-quadrature-phase-skew");
         anomaly_score += 20;
     }
-    if peak_indices.len() >= 2 && sfdr_db < 15.0 {
+    if (peak_indices.len() >= 2 && sfdr_db < 15.0) || cfar_spurs.len() >= 2 {
         anomaly_flags.push("strong-spurious-tone-low-sfdr");
         anomaly_score += 20;
     }
@@ -584,7 +701,7 @@ pub fn analyze_samples(samples: &[Complex64], sample_rate: Option<f64>) -> Resul
 
     let mut observations = if let Some(strongest) = spectral_peaks.first() {
         vec![format!(
-            "Strongest spectral component: {:.6} {}, {:.4}% of measured spectral power (Hann-windowed).",
+            "Strongest spectral component: {:.6} {}, {:.4}% of measured spectral power (Hann + {welch_segments}-segment Welch PSD).",
             strongest["frequency"].as_f64().unwrap_or_default(),
             unit,
             strongest["relative_power"].as_f64().unwrap_or_default() * 100.0
@@ -592,7 +709,10 @@ pub fn analyze_samples(samples: &[Complex64], sample_rate: Option<f64>) -> Resul
     } else {
         vec!["No non-zero spectral component was measured after mean removal.".to_owned()]
     };
-    observations.push(format!("Signal character indicator: {signal_character}."));
+    observations.push(format!(
+        "Signal character indicator: {signal_character}; CA-CFAR adaptive spurs detected: {}.",
+        cfar_spurs.len()
+    ));
     if !anomaly_flags.is_empty() {
         observations.push(format!(
             "Hardware/RF screening flagged {} indicator(s): {}.",
@@ -602,7 +722,7 @@ pub fn analyze_samples(samples: &[Complex64], sample_rate: Option<f64>) -> Resul
     }
 
     Ok(json!({
-        "schema_version": 3,
+        "schema_version": 4,
         "analysis": "offline_iq_spectral_baseline",
         "input": {
             "sample_count": samples.len(),
@@ -625,6 +745,8 @@ pub fn analyze_samples(samples: &[Complex64], sample_rate: Option<f64>) -> Resul
             "spectral_flatness": flatness,
             "spectral_entropy_bits": entropy,
             "occupied_bandwidth_99": obw,
+            "welch_segments": welch_segments,
+            "cfar_spur_count": cfar_spurs.len(),
             "envelope_kurtosis": envelope_kurtosis,
             "phase_diff_rms_rad": phase_diff_rms_rad,
             "signal_character": signal_character,
@@ -632,6 +754,7 @@ pub fn analyze_samples(samples: &[Complex64], sample_rate: Option<f64>) -> Resul
             "anomaly_score": anomaly_score
         },
         "anomaly_flags": anomaly_flags,
+        "cfar_spurs": cfar_spurs,
         "burst_segments": burst_segments,
         "spectral_peaks": spectral_peaks,
         "preview": downsample_preview(samples, &frequencies, &power, spectrogram),
@@ -671,16 +794,18 @@ mod tests {
     }
 
     #[test]
-    fn detects_iq_imbalance_and_dc_offset() {
-        let count = 256;
+    fn detects_iq_imbalance_and_dc_offset_plus_cfar() {
+        let count = 512;
         let samples: Vec<Complex64> = (0..count)
             .map(|index| {
-                let angle = 2.0 * PI * 10.0 * index as f64 / count as f64;
-                Complex64::new(1.5 * angle.cos() + 0.5, 0.5 * angle.sin())
+                let angle = 2.0 * PI * 16.0 * index as f64 / count as f64;
+                let spur = 0.25 * (2.0 * PI * 55.0 * index as f64 / count as f64).cos();
+                Complex64::new(1.5 * angle.cos() + spur + 0.5, 0.5 * angle.sin())
             })
             .collect();
-        let report = analyze_samples(&samples, Some(256.0)).unwrap();
+        let report = analyze_samples(&samples, Some(512.0)).unwrap();
         assert!(report["metrics"]["iq_gain_imbalance_db"].as_f64().unwrap().abs() > 3.0);
+        assert!(report["metrics"]["cfar_spur_count"].as_u64().unwrap() >= 1);
         assert!(report["metrics"]["anomaly_score"].as_u64().unwrap() >= 40);
     }
 

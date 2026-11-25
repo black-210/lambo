@@ -19,6 +19,7 @@ pub mod assess;
 pub mod audit;
 pub mod common;
 pub mod evidence;
+pub mod firmware;
 pub mod gui;
 pub mod legal;
 pub mod physical;
@@ -31,6 +32,7 @@ pub use assess::{
 };
 pub use audit::{audit_to_sarif, scan_for_issues, scan_source_tree};
 pub use evidence::{create_manifest, verify_manifest};
+pub use firmware::inspect_firmware_binary;
 pub use gui::launch_gui;
 pub use legal::{
     AuditLedgerEntry, AuthorizationScope, append_audit_entry, create_scope_file,
@@ -105,6 +107,10 @@ impl Workbench {
         scan_source_tree(root)
     }
 
+    pub fn inspect_firmware(&self, firmware_path: &Path) -> Result<Value> {
+        inspect_firmware_binary(firmware_path)
+    }
+
     pub fn assess(
         &self,
         iq_file: Option<&Path>,
@@ -130,7 +136,7 @@ pub mod prelude {
         AssessmentInput, AuthorizationScope, Workbench, analyze_iq, analyze_trace,
         assess_engagement, audit_to_sarif, create_manifest, create_scope_file,
         export_html_report, export_markdown_report, export_sarif_report, generate_demo_workspace,
-        launch_gui, scan_source_tree, simulate_qubit, verify_audit_ledger, verify_manifest,
-        verify_scope_file,
+        inspect_firmware_binary, launch_gui, scan_source_tree, simulate_qubit, verify_audit_ledger,
+        verify_manifest, verify_scope_file,
     };
 }

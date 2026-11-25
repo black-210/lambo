@@ -4,8 +4,8 @@ use iq_research_workbench::ai::start_chat;
 use iq_research_workbench::{
     AssessmentInput, analyze_iq, analyze_trace, assess_engagement, audit_to_sarif,
     create_manifest, create_scope_file, export_html_report, export_markdown_report,
-    export_sarif_report, generate_demo_workspace, launch_gui, scan_source_tree, simulate_qubit,
-    verify_audit_ledger, verify_manifest, verify_scope_file,
+    export_sarif_report, generate_demo_workspace, inspect_firmware_binary, launch_gui,
+    scan_source_tree, simulate_qubit, verify_audit_ledger, verify_manifest, verify_scope_file,
 };
 use serde_json::Value;
 use std::io::{self, Write};
@@ -86,6 +86,13 @@ enum Command {
         theta: f64,
         #[arg(long, default_value_t = 0.0)]
         phi: f64,
+        #[command(flatten)]
+        output: OutputArg,
+    },
+    /// Offline binary firmware surface inspector (entropy, magic, YARA-lite, indicators)
+    Firmware {
+        /// Path to the firmware binary or flash image file
+        firmware: PathBuf,
         #[command(flatten)]
         output: OutputArg,
     },
@@ -335,6 +342,9 @@ fn dispatch(command: Command) -> Result<()> {
                 args.model.as_deref(),
                 args.base_url.as_deref(),
             )
+        }
+        Command::Firmware { firmware, output } => {
+            write_report(inspect_firmware_binary(&firmware)?, output.output.as_deref())
         }
     }
 }

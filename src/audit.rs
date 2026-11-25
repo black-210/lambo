@@ -192,6 +192,39 @@ fn rules() -> &'static [Rule] {
                 .unwrap(),
                 recommendation: "Provision secrets via hardware keystore/secure element or environment; never hardcode credentials in firmware/source.",
             },
+            // ── NEW RULES ──────────────────────────────────────────────────────
+            Rule {
+                id: "unsafe-format-string",
+                category: "memory_safety",
+                cwe: "CWE-134",
+                severity: "high",
+                weight: 18,
+                pattern: Regex::new(r"\b(?:printf|fprintf|sprintf|syslog)\s*\(\s*[a-zA-Z_][a-zA-Z0-9_]*\s*[,)]")
+                    .unwrap(),
+                recommendation: "Pass format strings as literals or validate them; user-controlled format strings enable arbitrary memory read/write.",
+            },
+            Rule {
+                id: "stack-canary-disabled",
+                category: "memory_safety",
+                cwe: "CWE-693",
+                severity: "high",
+                weight: 16,
+                pattern: Regex::new(
+                    r"(?i)\b(?:-fno-stack-protector|STACK_PROTECTOR\s*=\s*0|CONFIG_CC_STACKPROTECTOR\s*=\s*n|__attribute__\s*\(\s*\(\s*no_stack_protector\s*\)\s*\))\b",
+                )
+                .unwrap(),
+                recommendation: "Enable -fstack-protector-strong for all firmware translation units to detect stack smashing at runtime.",
+            },
+            Rule {
+                id: "hardcoded-ssh-host-key",
+                category: "secrets",
+                cwe: "CWE-321",
+                severity: "critical",
+                weight: 25,
+                pattern: Regex::new(r"(?i)\b(?:dropbear_rsa_host_key|dropbear_dss_host_key|ssh_host_rsa_key|ssh_host_ecdsa_key|ssh_host_ed25519_key)\b")
+                    .unwrap(),
+                recommendation: "Generate SSH host keys at first boot instead of bundling fixed keys; identical keys across units break device identity.",
+            },
         ]
     })
 }
