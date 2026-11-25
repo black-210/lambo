@@ -236,6 +236,32 @@ fn detect_step_changes(values: &[f64], scale_sigma: f64) -> (usize, Option<usize
     (shifts, max_idx, max_z)
 }
 
+/// Bidirectional CUSUM drift & fault detector (sensitivity k = 0.5*sigma, decision h = 5*sigma).
+fn cusum_detector(values: &[f64], mean: f64, sigma: f64) -> (usize, f64) {
+    if sigma <= 1e-15 || values.len() < 16 {
+        return (0, 0.0);
+    }
+    let k = 0.5 * sigma;
+    let h = 5.0 * sigma;
+    let mut s_pos = 0.0_f64;
+    let mut s_neg = 0.0_f64;
+    let mut alarms = 0_usize;
+    let mut peak_cusum_sigma = 0.0_f64;
+
+    for &v in values {
+        s_pos = (s_pos + (v - mean) - k).max(0.0);
+        s_neg = (s_neg + (mean - v) - k).max(0.0);
+        let top = s_pos.max(s_neg);
+        peak_cusum_sigma = peak_cusum_sigma.max(top / sigma);
+        if top > h {
+            alarms += 1;
+            s_pos = 0.0;
+            s_neg = 0.0;
+        }
+    }
+    (alarms, peak_cusum_sigma)
+}
+
 fn pearson_correlation(a: &[f64], b: &[f64]) -> Option<f64> {
     let n = a.len().min(b.len());
     if n < 3 {
@@ -261,7 +287,14 @@ fn pearson_correlation(a: &[f64], b: &[f64]) -> Option<f64> {
     }
 }
 
-fn welch_t_statistic(a: &[f64], mean_a: f64, std_a: f64, b: &[f64], mean_b: f64, std_b: f64) -> Option<f64> {
+fn welch_t_statistic(
+    a: &[f64],
+    mean_a: f64,
+    std_a: f64,
+    b: &[f64],
+    mean_b: f64,
+    std_b: f64,
+) -> Option<f64> {
     let se_sq = (std_a * std_a) / a.len() as f64 + (std_b * std_b) / b.len() as f64;
     if se_sq > 1e-18 {
         Some((mean_a - mean_b) / se_sq.sqrt())
@@ -316,14 +349,23 @@ pub fn analyze_trace(path: &Path, reference_path: Option<&Path>, threshold: f64)
 
     let trace_rms = rms(&values);
     let peak_abs = values.iter().map(|value| value.abs()).fold(0.0, f64::max);
-    let crest_factor = if trace_rms > 0.0 { peak_abs / trace_rms } else { 0.0 };
+    let crest_factor = if trace_rms > 0.0 {
+        peak_abs / trace_rms
+    } else {
+        0.0
+    };
 
     let per = screen_periodicity(&values, mean);
     let (autocorr_lag, autocorr_peak) = autocorrelation_peak(&values, mean);
     let variance_burst_ratio = rolling_variance_burst_ratio(&values);
-    let scale_for_shift = if robust_sigma > 0.0 { robust_sigma } else { std_dev };
+    let scale_for_shift = if robust_sigma > 0.0 {
+        robust_sigma
+    } else {
+        std_dev
+    };
     let (change_point_count, max_shift_idx, max_shift_sigma) =
         detect_step_changes(&values, scale_for_shift);
+    let (cusum_alarms, peak_cusum_sigma) = cusum_detector(&values, mean, scale_for_shift);
 
     let mut anomaly_flags = Vec::new();
     let mut anomaly_score: u32 = 0;
@@ -335,7 +377,7 @@ pub fn analyze_trace(path: &Path, reference_path: Option<&Path>, threshold: f64)
         anomaly_flags.push("strong-periodic-clock-leakage");
         anomaly_score += 25;
     }
-    if change_point_count > 0 || variance_burst_ratio > 6.0 {
+    if change_point_count > 0 || variance_burst_ratio > 6.0 || cusum_alarms > 0 {
         anomaly_flags.push("baseline-step-shift-or-localized-activity-burst");
         anomaly_score += 20;
     }
@@ -355,7 +397,7 @@ pub fn analyze_trace(path: &Path, reference_path: Option<&Path>, threshold: f64)
     outlier_indices.truncate(50);
 
     let mut report = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "analysis": "offline_physical_measurement_trace",
         "input": {
             "name": path.file_name().unwrap_or_default().to_string_lossy(),
@@ -386,6 +428,8 @@ pub fn analyze_trace(path: &Path, reference_path: Option<&Path>, threshold: f64)
             "change_point_count": change_point_count,
             "max_shift_index": max_shift_idx,
             "max_shift_sigma": max_shift_sigma,
+            "cusum_alarm_count": cusum_alarms,
+            "cusum_peak_sigma": peak_cusum_sigma,
             "anomaly_score": anomaly_score.min(100)
         },
         "anomaly_flags": anomaly_flags,
@@ -396,12 +440,11 @@ pub fn analyze_trace(path: &Path, reference_path: Option<&Path>, threshold: f64)
             "spectrum_bins": per.spectrum_bins
         },
         "observations": [
-            format!("Found {outliers} robust statistical outlier(s) using a {threshold:.2} scaled-MAD threshold."),
+            format!("Found {outliers} robust statistical outlier(s) using a {threshold:.2} scaled-MAD threshold; CUSUM drift alarms: {cusum_alarms}."),
             format!("Periodic power ratio: {:.2}% (autocorr {:.2}, harmonic comb {}); variance burst ratio: {:.2}x.", per.periodic_power_ratio * 100.0, autocorr_peak, per.harmonic_comb_count, variance_burst_ratio)
         ],
         "limitations": [
             "This is a generic measurement-trace screen, not proof of a hardware exploit.",
-            "Outliers or periodic harmonics may reflect normal clocks, sensor artifacts, or lab noise.",
             "No key extraction, active fault injection, or live device interaction is performed."
         ]
     });
@@ -474,6 +517,197 @@ pub fn analyze_trace(path: &Path, reference_path: Option<&Path>, threshold: f64)
     Ok(report)
 }
 
+// ─── Multi-Trace Side-Channel Matrix Evaluation (TVLA + NICV + XCorr Alignment) ─
+
+/// Evaluate a multi-trace side-channel matrix CSV (`label,sample_0,sample_1,...`).
+///
+/// Aligns trace jitter via cross-correlation (`align_window`), computes sample-wise TVLA
+/// Welch's t-test between class `0` and class `!= 0`, Normalized Inter-Class Variance (NICV),
+/// and Side-Channel SNR(t) across all sample columns (ISO 17825 / FIPS 140-3 leakage assessment).
+pub fn analyze_trace_matrix(csv_path: &Path, align_window: usize) -> Result<Value> {
+    let file = File::open(csv_path)
+        .with_context(|| format!("Opening side-channel trace matrix {}", csv_path.display()))?;
+    let mut reader = ReaderBuilder::new()
+        .has_headers(false)
+        .comment(Some(b'#'))
+        .from_reader(file);
+
+    let mut labels: Vec<i64> = Vec::new();
+    let mut traces: Vec<Vec<f64>> = Vec::new();
+    let mut skipped_header = false;
+    for rec in reader.records() {
+        let rec = rec?;
+        if rec.len() < 3 {
+            continue;
+        }
+        let Ok(lbl) = rec[0].trim().parse::<i64>() else {
+            if traces.is_empty() && !skipped_header {
+                skipped_header = true;
+                continue;
+            }
+            bail!("Invalid class label in trace matrix.");
+        };
+        let row: Result<Vec<f64>, _> = (1..rec.len()).map(|c| rec[c].trim().parse::<f64>()).collect();
+        let row = row.context("Non-numeric trace sample in matrix row")?;
+        if let Some(first) = traces.first()
+            && row.len() != first.len()
+        {
+            bail!("All trace matrix rows must have identical sample count.");
+        }
+        labels.push(lbl);
+        traces.push(row);
+    }
+
+    if traces.len() < 4 {
+        bail!("Need at least 4 traces for TVLA / NICV matrix screening.");
+    }
+    let num_samples = traces[0].len();
+
+    // Optional cross-correlation alignment against trace 0
+    if align_window > 0 && num_samples > 2 * align_window + 4 {
+        let template = traces[0].clone();
+        let max_lag = align_window.min(num_samples / 4);
+        for tr in traces.iter_mut().skip(1) {
+            let mut best_lag = 0isize;
+            let mut best_corr = f64::NEG_INFINITY;
+            for lag in -(max_lag as isize)..=(max_lag as isize) {
+                let mut sum = 0.0;
+                let mut cnt = 0usize;
+                for (i, &tmpl_val) in template.iter().enumerate().take(num_samples) {
+                    let j = i as isize + lag;
+                    if j >= 0 && (j as usize) < num_samples {
+                        sum += tmpl_val * tr[j as usize];
+                        cnt += 1;
+                    }
+                }
+                if cnt > 0 && (sum / cnt as f64) > best_corr {
+                    best_corr = sum / cnt as f64;
+                    best_lag = lag;
+                }
+            }
+            if best_lag != 0 {
+                let old = tr.clone();
+                for (i, dst) in tr.iter_mut().enumerate().take(num_samples) {
+                    let src = (i as isize + best_lag).clamp(0, num_samples as isize - 1) as usize;
+                    *dst = old[src];
+                }
+            }
+        }
+    }
+
+    // Group indices by label (for binary TVLA: class 0 vs non-zero)
+    let mut group_a = Vec::new();
+    let mut group_b = Vec::new();
+    let mut classes: std::collections::BTreeMap<i64, Vec<usize>> = std::collections::BTreeMap::new();
+    for (idx, &lbl) in labels.iter().enumerate() {
+        classes.entry(lbl).or_default().push(idx);
+        if lbl == 0 {
+            group_a.push(idx);
+        } else {
+            group_b.push(idx);
+        }
+    }
+    if group_a.len() < 2 || group_b.len() < 2 {
+        bail!("Need at least 2 traces in class 0 and 2 in non-zero class(es) for TVLA/NICV.");
+    }
+
+    let mut t_curve = Vec::with_capacity(num_samples);
+    let mut nicv_curve = Vec::with_capacity(num_samples);
+    let mut snr_curve = Vec::with_capacity(num_samples);
+    let mut leaking_points = Vec::new();
+    let mut max_abs_t = 0.0_f64;
+    let mut max_nicv = 0.0_f64;
+    let mut max_snr = 0.0_f64;
+
+    for col in 0..num_samples {
+        let a_vals: Vec<f64> = group_a.iter().map(|&i| traces[i][col]).collect();
+        let b_vals: Vec<f64> = group_b.iter().map(|&i| traces[i][col]).collect();
+        let ma = a_vals.iter().sum::<f64>() / a_vals.len() as f64;
+        let mb = b_vals.iter().sum::<f64>() / b_vals.len() as f64;
+        let (sa, _, _) = moments(&a_vals, ma);
+        let (sb, _, _) = moments(&b_vals, mb);
+        let t_val = welch_t_statistic(&a_vals, ma, sa, &b_vals, mb, sb).unwrap_or(0.0);
+        t_curve.push(t_val);
+        max_abs_t = max_abs_t.max(t_val.abs());
+
+        // NICV = Var(E[X | class]) / Var(X) across all classes
+        let all_vals: Vec<f64> = traces.iter().map(|r| r[col]).collect();
+        let mu_all = all_vals.iter().sum::<f64>() / all_vals.len() as f64;
+        let var_all = all_vals
+            .iter()
+            .map(|x| (x - mu_all).powi(2))
+            .sum::<f64>()
+            / all_vals.len() as f64;
+        let mut class_means = Vec::new();
+        let mut intra_vars = Vec::new();
+        for idxs in classes.values() {
+            let m = idxs.iter().map(|&i| traces[i][col]).sum::<f64>() / idxs.len() as f64;
+            let v = idxs
+                .iter()
+                .map(|&i| (traces[i][col] - m).powi(2))
+                .sum::<f64>()
+                / idxs.len() as f64;
+            class_means.push((idxs.len() as f64, m));
+            intra_vars.push((idxs.len() as f64, v));
+        }
+        let between_var = class_means
+            .iter()
+            .map(|&(cnt, m)| (cnt / traces.len() as f64) * (m - mu_all).powi(2))
+            .sum::<f64>();
+        let within_var = intra_vars
+            .iter()
+            .map(|&(cnt, v)| (cnt / traces.len() as f64) * v)
+            .sum::<f64>();
+        let nicv = if var_all > 1e-18 {
+            (between_var / var_all).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let snr = if within_var > 1e-18 {
+            between_var / within_var
+        } else {
+            0.0
+        };
+        nicv_curve.push(nicv);
+        snr_curve.push(snr);
+        max_nicv = max_nicv.max(nicv);
+        max_snr = max_snr.max(snr);
+
+        if t_val.abs() > 4.5 {
+            leaking_points.push(json!({
+                "sample_index": col,
+                "welch_t": t_val,
+                "nicv": nicv,
+                "snr": snr
+            }));
+        }
+    }
+
+    leaking_points.sort_by(|a, b| {
+        b["welch_t"]
+            .as_f64()
+            .unwrap_or(0.0)
+            .abs()
+            .total_cmp(&a["welch_t"].as_f64().unwrap_or(0.0).abs())
+    });
+    leaking_points.truncate(20);
+
+    Ok(json!({
+        "schema_version": 1,
+        "analysis": "side_channel_matrix_tvla_nicv",
+        "trace_count": traces.len(),
+        "samples_per_trace": num_samples,
+        "class_count": classes.len(),
+        "max_abs_welch_t": max_abs_t,
+        "tvla_leakage_detected": max_abs_t > 4.5,
+        "max_nicv": max_nicv,
+        "max_snr": max_snr,
+        "leaking_point_count": leaking_points.len(),
+        "top_leaking_points": leaking_points,
+        "t_curve_preview": t_curve.iter().enumerate().step_by((num_samples / 200).max(1)).map(|(i, &t)| [i as f64, t]).collect::<Vec<_>>()
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,5 +740,23 @@ mod tests {
         fs::remove_file(&path).unwrap();
         assert!(report["metrics"]["periodic_power_ratio"].as_f64().unwrap() > 0.8);
         assert!(report["metrics"]["autocorrelation_peak"].as_f64().unwrap() > 0.8);
+    }
+
+    #[test]
+    fn tvla_matrix_detects_class_dependent_leak_point() {
+        let path = std::env::temp_dir().join(format!("iq-tvla-{}.csv", std::process::id()));
+        let mut csv = String::from("label,s0,s1,s2,s3\n");
+        for i in 0..20 {
+            let cls = i % 2;
+            let noise = (i as f64) * 0.001;
+            let leak = if cls == 1 { 5.0 } else { 0.0 };
+            csv.push_str(&format!("{cls},{noise},{noise},{},{noise}\n", leak + noise));
+        }
+        fs::write(&path, csv).unwrap();
+        let rep = analyze_trace_matrix(&path, 0).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert_eq!(rep["tvla_leakage_detected"], true);
+        assert!(rep["max_abs_welch_t"].as_f64().unwrap() > 4.5);
+        assert!(rep["max_nicv"].as_f64().unwrap() > 0.9);
     }
 }

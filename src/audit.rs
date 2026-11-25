@@ -225,6 +225,36 @@ fn rules() -> &'static [Rule] {
                     .unwrap(),
                 recommendation: "Generate SSH host keys at first boot instead of bundling fixed keys; identical keys across units break device identity.",
             },
+            Rule {
+                id: "hw-ble-just-works-pairing",
+                category: "wireless_security",
+                cwe: "CWE-287",
+                severity: "high",
+                weight: 16,
+                pattern: Regex::new(r"(?i)\b(?:IO_CAPABILITY_NO_INPUT_NO_OUTPUT|BLE_GAP_IO_CAPS_NONE|SMP_IO_NO_INPUT_NO_OUTPUT|ALLOW_UNAUTH_BLE_BONDING)\b")
+                    .unwrap(),
+                recommendation: "Enforce Numeric Comparison or Passkey Entry (LE Secure Connections MITM protection) instead of Just-Works BLE pairing.",
+            },
+            Rule {
+                id: "crypto-ecb-or-static-iv",
+                category: "crypto_weakness",
+                cwe: "CWE-327",
+                severity: "high",
+                weight: 16,
+                pattern: Regex::new(r"(?i)\b(?:AES_ECB|CIPHER_MODE_ECB|mbedtls_aes_crypt_ecb|STATIC_AES_IV)\b")
+                    .unwrap(),
+                recommendation: "Replace deterministic ECB mode or static IVs with authenticated encryption (AES-GCM or ChaCha20-Poly1305) and unique hardware TRNG nonces.",
+            },
+            Rule {
+                id: "hw-unauthenticated-ota",
+                category: "hardware_interface",
+                cwe: "CWE-494",
+                severity: "critical",
+                weight: 22,
+                pattern: Regex::new(r"(?i)\b(?:OTA_SKIP_VERIFY|ALLOW_HTTP_OTA|VERIFY_FW_SIG\s*=\s*0|OTA_NO_ROLLBACK_CHECK)\b")
+                    .unwrap(),
+                recommendation: "Verify signed firmware digests and anti-rollback counters prior to staging any OTA image.",
+            },
         ]
     })
 }

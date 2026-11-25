@@ -1,49 +1,35 @@
-# IQ Hardware Red-Team & Research Workbench
+# IQ Hardware Red-Team, Cryptanalysis & Physical AI Workbench
 
-A Rust, offline-first, authorized workbench for hardware security red-team assessments, IQ signal anomaly screening, physical measurement trace analysis, evidence integrity verification, static hardware/firmware review, and educational single-qubit simulation.
+An offline-first, authorized Rust platform (**CLI + Local Web GUI + Ergonomic Rust Library**) for hardware security assessments, RF IQ anomaly screening, physical side-channel evaluation, logic-bus decoding, binary protocol inspection, firmware metadata triage, from-scratch cryptographic weakness auditing, and autonomous offline workspace analysis.
 
-## Key Capabilities
+## Architecture & Modules
 
-- **IQ RF/Physical Anomaly Screening (`signal.rs`)**: Supports `.csv`, `.npy`, and raw SDR binary IQ captures (`.cf32`, `.cs8`, `.cu8`). Applies Hann windowing prior to FFT, computes I/Q gain imbalance, quadrature phase skew, DC offset / LO leakage ratio, SNR, Spurious-Free Dynamic Range (SFDR), Occupied Bandwidth (99% OBW), spectral flatness, signal-character indicators, transient burst detection, and a time-frequency spectrogram.
-- **Physical Trace Side-Channel Screening (`physical.rs`)**: MAD-based glitch/outlier extraction, FFT clock-harmonic periodicity ratio, lag autocorrelation peak, step-change/drift detection, higher-order moments (skewness, excess kurtosis), and reference trace comparison with Welch's t-statistic screening.
-- **Hardware & Firmware Static Audit (`audit.rs`)**: Read-only local scanner covering C/C++, Rust, Python, JS/TS, HDL (`.v`, `.sv`, `.vhd`), DeviceTree (`.dts`), and board configs for JTAG/SWD unlock flags, UART debug consoles, secure-boot bypasses, disabled watchdog/brownout, unsafe memory APIs, weak PRNG/crypto, disabled TLS verification, PEM private keys, and hardcoded secrets. Exports **SARIF v2.1.0**.
-- **Legal Authorization & Tamper-Evident Audit Ledger (`legal.rs`)**: Scope attestation (`scope.json`, enforcing `offline_only: true`) and a SHA-256 hash-chained audit ledger (`audit_ledger.jsonl`).
-- **Unified Assessment & Report Exports (`assess.rs`)**: Combines IQ, physical traces, and firmware audits into a single risk-scored JSON, standalone HTML, Markdown, and SARIF report.
-- **Easy Rust Library API (`lib.rs`)**: Ergonomic `Workbench` builder and `prelude` module.
-- **CLI & Bilingual GUI (`main.rs`, `gui.rs`)**: Full `clap` CLI plus a local localhost-only (`127.0.0.1`) Arabic/English interactive web dashboard with Canvas visualizations (IQ Constellation, FFT Spectrum, Envelope, RF Spectrogram/Waterfall, Physical Waveform & Spectrum).
+- **IQ / SDR DSP (`src/signal.rs`)**: Supports `.csv`, `.npy`, `.cf32`, `.cs16`, `.cs8`, `.cu8`, `.wav` (RIFF I/Q), and `.sigmf-meta` + `.sigmf-data`. Applies Hann windowing, Welch PSD, CA-CFAR spur extraction, Image Rejection Ratio (IRR), Higher-Order Cumulants Modulation Classification (`C20`, `C40`, `C42`), cyclostationary symbol-rate estimation, transient burst detection, and time-frequency spectrogram.
+- **Physical Side-Channel Screening (`src/physical.rs`)**: MAD outlier detection, CUSUM drift/fault alarms, FFT clock-harmonic comb ratio, lag autocorrelation, step-change detection, Welch's t-test TVLA, plus **Multi-Trace Matrix TVLA / NICV / SNR(t)** with cross-correlation jitter alignment.
+- **From-Scratch Big-Integer & Cryptanalysis Research (`src/bigint.rs`, `src/cryptanalysis.rs`)**: Zero-dependency arbitrary-precision `BigUint`/`BigInt` arithmetic powering RSA parameter audits (Fermat, Pollard `p-1`, Pollard-Rho Brent, Wiener's continued-fraction small-`d` check, Batch GCD shared-prime check, Common-Modulus check), real **LLL Lattice Basis Reduction** & Subset-Sum auditing, **Berlekamp-Massey GF(2)** minimal LFSR complexity, **NIST SP 800-22** 5-test statistical randomness suite, ECB block repetition detection, CTR/OTP crib-dragging, Vigenère IC/chi-squared recovery, and Hamming-distance XOR recovery.
+- **Hardware Discovery & Logic Bus Decoders (`src/hardware.rs`)**: Passive read-only OS enumeration of serial COM ports and USB SDR/logic/debug probes, from-scratch IEEE 1364 `.vcd` logic-analyzer parser, **UART 8N1** (auto-baud), **SPI** (Modes 0–3), and **I2C** decoders, plus the `HardwareCaptureSource` streaming trait for Rust library integration.
+- **Protocol Capture Analyzer (`src/protocol.rs`)**: From-scratch binary **`.pcap`** (Ethernet II / IPv4 / TCP / UDP) and **`.csv`** parser flagging cleartext protocols, periodic beaconing CV, port sweeps, DNS exfiltration heuristics, and sensitive payload strings.
+- **Firmware & Static Code Audits (`src/firmware.rs`, `src/audit.rs`)**: ELF32/ELF64 defensive binary hardening inspection (`PIE`, `NX`, `RELRO`, stack canary markers), ARM Cortex-M vector-table check, YARA-lite byte patterns, entropy-drop profiling, and SARIF v2.1.0 hardware/code scanner.
+- **Autonomous Physical AI & Governance (`src/ai.rs`, `src/legal.rs`, `src/evidence.rs`, `src/assess.rs`)**: Recursive offline workspace audit engine with cross-domain correlation hypotheses, grounded bilingual (`ar`/`en`) offline diagnostic advisor, optional Gemini/OpenAI chat, SHA-256 evidence manifests, legal scope verification, and tamper-evident JSONL hash-chained ledger.
+- **Quantum Engine (`src/quantum.rs`)**: Single-qubit and 1..8-qubit universal circuit simulator (`H`, `X`, `Y`, `Z`, `S`, `T`, `RX`, `RY`, `RZ`, `CNOT`, `CZ`, `SWAP`, `TOFFOLI`, `QFT`) plus BB84 QBER eavesdropper simulation.
 
 ## Quick Start
-
-Run lints and tests:
 
 ```powershell
 cargo clippy --all-targets -- -D warnings
 cargo test
-```
-
-Launch the Graphical Workbench (GUI):
-
-```powershell
 cargo run -- gui
 ```
 
-Generate synthetic legal lab demo data and run a full assessment:
+Run an autonomous offline AI audit on the generated demo workspace:
 
 ```powershell
 cargo run -- sample --output-dir .\demo_lab
-cargo run -- assess `
-  --scope .\demo_lab\scope.json `
-  --iq .\demo_lab\iq_capture_demo.csv --sample-rate 2000000 `
-  --physical .\demo_lab\physical_trace_demo.csv --reference .\demo_lab\physical_reference_demo.csv `
-  --source .\demo_lab\sample_firmware `
-  --ledger .\demo_lab\audit_ledger.jsonl `
-  --html .\demo_lab\report.html `
-  --markdown .\demo_lab\report.md `
-  --sarif .\demo_lab\report.sarif `
-  --output .\demo_lab\report.json
-cargo run -- ledger .\demo_lab\audit_ledger.jsonl
+cargo run -- ai audit .\demo_lab --scope .\demo_lab\scope.json --ledger .\demo_lab\ai_ledger.jsonl --sample-rate 2000000 --output .\demo_lab\ai_report.json
+cargo run -- hardware discover
+cargo run -- crypto rsa-audit --modulus 90581 --exponent 17993
 ```
 
 ## Legal & Safety Boundaries
 
-All tools operate strictly on **authorized local files**. They do not transmit RF, jam signals, interact with live hardware devices, contact external targets, execute scanned code, extract cryptographic keys, or test exploitability. Findings and statistical anomaly scores are indicators for authorized expert review—not proof of vulnerability.
+All analysis modules operate on **authorized local captures, artifacts, and read-only OS device descriptors**. The tool never transmits RF signals, injects hardware faults, flashes firmware, bypasses hardware protections, or attacks live external targets.

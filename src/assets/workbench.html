@@ -47,16 +47,15 @@ button, .btn {
   padding: 8px 14px;
   font-weight: 700;
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: 0.88rem;
 }
 button.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
 button.ok { background: var(--ok); color: #042116; }
-button:disabled { opacity: 0.5; cursor: not-allowed; }
 .banner {
   background: rgba(52, 211, 153, 0.08);
   border-bottom: 1px solid rgba(52, 211, 153, 0.3);
   padding: 10px 24px;
-  font-size: 0.88rem;
+  font-size: 0.86rem;
   color: #b7f5dc;
   display: flex;
   justify-content: space-between;
@@ -65,8 +64,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .tabs {
   display: flex;
-  gap: 8px;
-  padding: 14px 24px 0;
+  gap: 6px;
+  padding: 12px 24px 0;
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
 }
@@ -76,14 +75,15 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border: 1px solid transparent;
   border-bottom: none;
   border-radius: 8px 8px 0 0;
-  padding: 10px 16px;
+  padding: 9px 13px;
+  white-space: nowrap;
 }
 .tab.active {
   background: var(--panel);
   color: var(--accent);
   border-color: var(--border);
 }
-main { max-width: 1280px; margin: 0 auto; padding: 20px 24px 48px; }
+main { max-width: 1320px; margin: 0 auto; padding: 20px 24px 48px; }
 .pane { display: none; }
 .pane.active { display: block; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
@@ -95,10 +95,10 @@ main { max-width: 1280px; margin: 0 auto; padding: 20px 24px 48px; }
   margin-bottom: 16px;
 }
 .card h2, .card h3 { margin-top: 0; font-size: 1.05rem; color: #dbeafe; }
-label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
-input, select {
+label { display: block; font-size: 0.84rem; color: var(--muted); margin-bottom: 4px; }
+input, select, textarea {
   width: 100%;
-  padding: 9px 11px;
+  padding: 8px 11px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: #0b101b;
@@ -106,16 +106,17 @@ input, select {
   margin-bottom: 10px;
   direction: ltr;
   text-align: left;
+  font-family: inherit;
 }
-.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 10px; margin: 12px 0; }
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 12px 0; }
 .metric {
   background: var(--panel2);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 12px;
 }
-.metric .k { font-size: 0.78rem; color: var(--muted); }
-.metric .v { font-size: 1.08rem; font-weight: 700; color: var(--accent); margin-top: 2px; word-break: break-word; }
+.metric .k { font-size: 0.76rem; color: var(--muted); }
+.metric .v { font-size: 1.04rem; font-weight: 700; color: var(--accent); margin-top: 2px; word-break: break-word; }
 .pill {
   display: inline-block;
   padding: 3px 10px;
@@ -131,13 +132,13 @@ input, select {
 .pill.low { color: var(--ok); border-color: rgba(52,211,153,0.4); }
 canvas {
   width: 100%;
-  height: 240px;
+  height: 230px;
   background: #090d16;
   border: 1px solid var(--border);
   border-radius: 10px;
   display: block;
 }
-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 th, td { text-align: start; padding: 8px 10px; border-bottom: 1px solid var(--border); }
 th { color: var(--muted); font-weight: 600; }
 pre {
@@ -158,60 +159,84 @@ pre {
 <body>
 <header>
   <div class="brand">
-    <h1 data-i18n="title">منصة فريق الأحمر لأمن العتاد وإشارات IQ</h1>
-    <span data-i18n="subtitle">أداة قانونية تعمل محلياً (Offline) لفحص مؤشرات ثغرات العتاد، الآثار الفيزيائية، وإشارات IQ</span>
+    <h1 data-i18n="title">منصة فريق الأحمر لأمن العتاد، الذكاء الفيزيائي، وكسر التشفير البحثي</h1>
+    <span data-i18n="subtitle">بيئة أبحاث أمنية قانونية تعمل محلياً بالكامل (Offline) لفحص IQ، القنوات الجانبية، ناقلات العتاد، التشفير، والبروتوكولات</span>
   </div>
   <div class="actions">
-    <button class="ok" onclick="generateDemo()" data-i18n="btn_demo">توليد بيانات مختبر تجريبية</button>
+    <button class="ok" onclick="generateDemo()" data-i18n="btn_demo">توليد مختبر تجريبي</button>
     <button class="secondary" onclick="toggleLang()" id="langBtn">English</button>
   </div>
 </header>
 
 <div class="banner">
-  <span data-i18n="legal_notice">⚖️ وضع التشغيل القانوني المصرح به فقط: تحليل محلي للملفات بدون إرسال RF أو استغلال أو اتصال بأهداف خارجية.</span>
+  <span data-i18n="legal_notice">⚖️ وضع البحث الأمني القانوني المصرح به فقط: تشغيل محلي بالكامل بدون إرسال RF أو اتصال بأهداف خارجية.</span>
   <span id="scopeBadge">Scope: —</span>
 </div>
 
 <div class="tabs">
-  <button class="tab active" onclick="showTab('assess', this)" data-i18n="tab_assess">التقييم الشامل</button>
-  <button class="tab" onclick="showTab('iq', this)" data-i18n="tab_iq">محلل إشارات IQ</button>
-  <button class="tab" onclick="showTab('phys', this)" data-i18n="tab_phys">فحص الآثار الفيزيائية</button>
-  <button class="tab" onclick="showTab('audit', this)" data-i18n="tab_audit">تدقيق العتاد والبرمجيات</button>
-  <button class="tab" onclick="showTab('forensic', this)" data-i18n="tab_forensic">الأدلة وسجل التدقيق</button>
-  <button class="tab" onclick="showTab('quantum', this)" data-i18n="tab_quantum">محاكاة كيوبت تعليمية</button>
+  <button class="tab active" onclick="showTab('ai', this)" data-i18n="tab_ai">البيئة الفيزيائية AI</button>
+  <button class="tab" onclick="showTab('assess', this)" data-i18n="tab_assess">التقييم الشامل</button>
+  <button class="tab" onclick="showTab('iq', this)" data-i18n="tab_iq">إشارات IQ / SDR</button>
+  <button class="tab" onclick="showTab('phys', this)" data-i18n="tab_phys">الآثار و TVLA</button>
+  <button class="tab" onclick="showTab('crypto', this)" data-i18n="tab_crypto">خوارزميات كسر التشفير</button>
+  <button class="tab" onclick="showTab('hardware', this)" data-i18n="tab_hw">العتاد والناقلات</button>
+  <button class="tab" onclick="showTab('audit', this)" data-i18n="tab_audit">الكود والبرمجيات الثابتة</button>
+  <button class="tab" onclick="showTab('forensic', this)" data-i18n="tab_forensic">الأدلة والسجل</button>
+  <button class="tab" onclick="showTab('quantum', this)" data-i18n="tab_quantum">الحوسبة الكمية</button>
 </div>
 
 <main>
+  <!-- Autonomous Physical AI Lab -->
+  <section id="pane-ai" class="pane active">
+    <div class="card">
+      <h2 data-i18n="ai_title">وكيل الذكاء الفيزيائي التلقائي (Autonomous Physical & Hardware AI)</h2>
+      <div class="grid">
+        <div><label>Workspace Directory</label><input id="ai_ws" value="./demo_lab" /></div>
+        <div><label>Scope File (optional)</label><input id="ai_scope" value="./demo_lab/scope.json" /></div>
+        <div><label>Audit Ledger JSONL (optional)</label><input id="ai_ledger" value="./demo_lab/audit_ledger.jsonl" /></div>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button onclick="runAiAudit()" data-i18n="btn_ai_run">فحص واختبار شامل تلقائي</button>
+        <button class="secondary" onclick="exportAiHtml()">Export HTML</button>
+      </div>
+      <div id="ai_status"></div>
+    </div>
+    <div id="ai_results" class="card" style="display:none;">
+      <div class="metrics" id="ai_metrics"></div>
+      <h3>Correlated Cross-Domain Hypotheses</h3>
+      <div id="ai_hyps"></div>
+      <h3>Interactive Offline Physical AI Advisor</h3>
+      <div class="grid">
+        <div><input id="ai_q" placeholder="اسأل AI عن الثغرات أو طرق الحل / Ask about remediation..." /></div>
+        <div><button class="ok" onclick="askOfflineAi()">Diagnose / اسأل AI</button></div>
+      </div>
+      <pre id="ai_diag"></pre>
+      <pre id="ai_json"></pre>
+    </div>
+  </section>
+
   <!-- Unified Assessment -->
-  <section id="pane-assess" class="pane active">
+  <section id="pane-assess" class="pane">
     <div class="card">
       <h2 data-i18n="assess_title">تشغيل التقييم الأمني الشامل للعتاد (Unified Hardware Assessment)</h2>
       <div class="grid">
         <div>
-          <label data-i18n="lbl_scope">ملف التفويض القانوني (scope.json)</label>
-          <input id="a_scope" placeholder="./demo_lab/scope.json" />
-          <label data-i18n="lbl_iq">ملف إشارة IQ (CSV/NPY/CF32/CS8/CU8)</label>
-          <input id="a_iq" placeholder="./demo_lab/iq_capture_demo.csv" />
-          <label data-i18n="lbl_rate">معدل العينات (Hz)</label>
-          <input id="a_rate" value="2000000" />
+          <label>Scope (scope.json)</label><input id="a_scope" placeholder="./demo_lab/scope.json" />
+          <label>IQ File (CSV/NPY/CF32/CS16/CS8/CU8/WAV/SigMF)</label><input id="a_iq" placeholder="./demo_lab/iq_capture_demo.csv" />
+          <label>Sample Rate (Hz)</label><input id="a_rate" value="2000000" />
         </div>
         <div>
-          <label data-i18n="lbl_phys">ملف الأثر الفيزيائي (CSV)</label>
-          <input id="a_phys" placeholder="./demo_lab/physical_trace_demo.csv" />
-          <label data-i18n="lbl_ref">ملف المرجع الفيزيائي (اختياري)</label>
-          <input id="a_ref" placeholder="./demo_lab/physical_reference_demo.csv" />
-          <label data-i18n="lbl_src">مجلد الكود / إعدادات العتاد</label>
-          <input id="a_src" placeholder="./demo_lab/sample_firmware" />
+          <label>Physical Trace (CSV)</label><input id="a_phys" placeholder="./demo_lab/physical_trace_demo.csv" />
+          <label>Reference Trace (CSV)</label><input id="a_ref" placeholder="./demo_lab/physical_reference_demo.csv" />
+          <label>Source / Firmware Dir</label><input id="a_src" placeholder="./demo_lab/sample_firmware" />
         </div>
         <div>
-          <label data-i18n="lbl_ledger">سجل التدقيق المشفر (JSONL اختياري)</label>
-          <input id="a_ledger" placeholder="./demo_lab/audit_ledger.jsonl" />
-          <label data-i18n="lbl_html_out">مسار تصدير التقرير (HTML/MD/SARIF)</label>
-          <input id="a_html" placeholder="./demo_lab/assessment_report.html" />
-          <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
-            <button onclick="runAssess()" data-i18n="btn_run_assess">تشغيل التقييم</button>
+          <label>Audit Ledger (JSONL)</label><input id="a_ledger" placeholder="./demo_lab/audit_ledger.jsonl" />
+          <label>Report Export Path</label><input id="a_html" placeholder="./demo_lab/assessment_report.html" />
+          <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+            <button onclick="runAssess()">Run Assessment</button>
             <button class="secondary" onclick="exportReport('html')">HTML</button>
-            <button class="secondary" onclick="exportReport('markdown')">Markdown</button>
+            <button class="secondary" onclick="exportReport('markdown')">MD</button>
             <button class="secondary" onclick="exportReport('sarif')">SARIF</button>
           </div>
         </div>
@@ -228,18 +253,12 @@ pre {
   <!-- IQ Analyzer -->
   <section id="pane-iq" class="pane">
     <div class="card">
-      <h2 data-i18n="iq_title">تحليل ثغرات وجودة إشارة IQ الفيزيائية</h2>
+      <h2 data-i18n="iq_title">محلل إشارات IQ والراديو المعرف برمجياً (SDR DSP)</h2>
       <div class="grid">
-        <div>
-          <label data-i18n="lbl_iq">ملف IQ (CSV / NPY / CF32 / CS8 / CU8)</label>
-          <input id="iq_path" placeholder="./demo_lab/iq_capture_demo.csv" />
-        </div>
-        <div>
-          <label data-i18n="lbl_rate">معدل العينات (Hz)</label>
-          <input id="iq_rate" value="2000000" />
-        </div>
+        <div><label>IQ Capture Path</label><input id="iq_path" placeholder="./demo_lab/iq_capture_demo.csv" /></div>
+        <div><label>Sample Rate (Hz)</label><input id="iq_rate" value="2000000" /></div>
       </div>
-      <button onclick="runIq()" data-i18n="btn_analyze">تحليل الإشارة</button>
+      <button onclick="runIq()">Analyze IQ Signal</button>
       <div id="iq_status"></div>
     </div>
     <div id="iq_results" style="display:none;">
@@ -258,25 +277,23 @@ pre {
     </div>
   </section>
 
-  <!-- Physical Trace -->
+  <!-- Physical Trace & TVLA Matrix -->
   <section id="pane-phys" class="pane">
     <div class="card">
-      <h2 data-i18n="phys_title">فحص الآثار الفيزيائية (الطاقة / الكهرومغناطيسية / الخلل)</h2>
+      <h2 data-i18n="phys_title">فحص الآثار الفيزيائية ومصفوفة القنوات الجانبية (TVLA / NICV / CUSUM)</h2>
       <div class="grid">
+        <div><label>Trace or Matrix CSV Path</label><input id="p_path" placeholder="./demo_lab/physical_trace_demo.csv" /></div>
+        <div><label>Reference Trace CSV (single-trace mode)</label><input id="p_ref" placeholder="./demo_lab/physical_reference_demo.csv" /></div>
         <div>
-          <label data-i18n="lbl_phys">ملف الأثر (CSV)</label>
-          <input id="p_path" placeholder="./demo_lab/physical_trace_demo.csv" />
-        </div>
-        <div>
-          <label data-i18n="lbl_ref">ملف المرجع (اختياري)</label>
-          <input id="p_ref" placeholder="./demo_lab/physical_reference_demo.csv" />
-        </div>
-        <div>
-          <label data-i18n="lbl_thresh">عتبة الشذوذ (MAD Threshold)</label>
+          <label>Mode / Threshold</label>
+          <select id="p_mode">
+            <option value="single">Single Trace + Reference</option>
+            <option value="matrix">Multi-Trace TVLA / NICV / SNR Matrix</option>
+          </select>
           <input id="p_thresh" value="6.0" />
         </div>
       </div>
-      <button onclick="runPhys()" data-i18n="btn_scan_phys">فحص الأثر الفيزيائي</button>
+      <button onclick="runPhys()">Scan Physical Trace / Matrix</button>
       <div id="p_status"></div>
     </div>
     <div id="p_results" style="display:none;">
@@ -285,34 +302,94 @@ pre {
         <div id="p_flags"></div>
       </div>
       <div class="grid">
-        <div class="card"><h3>Physical Waveform &amp; Glitch Spikes</h3><canvas id="c_waveform" width="480" height="240"></canvas></div>
+        <div class="card"><h3>Waveform / TVLA t-statistic Curve</h3><canvas id="c_waveform" width="480" height="240"></canvas></div>
         <div class="card"><h3>Trace Frequency Spectrum (dB)</h3><canvas id="c_phys_spec" width="480" height="240"></canvas></div>
       </div>
     </div>
   </section>
 
-  <!-- Hardware & Firmware Audit -->
-  <section id="pane-audit" class="pane">
+  <!-- Cryptanalysis Lab -->
+  <section id="pane-crypto" class="pane">
     <div class="card">
-      <h2 data-i18n="audit_title">الفحص الساكن لثغرات العتاد والبرمجيات الثابتة</h2>
+      <h2 data-i18n="crypto_title">مختبر خوارزميات كسر التشفير وفحص العشوائية (من الصفر / BigUint / LLL / NIST)</h2>
       <div class="grid">
         <div>
-          <label data-i18n="lbl_src">مسار المجلد المحلي</label>
-          <input id="aud_path" placeholder="./demo_lab/sample_firmware" />
+          <label>RSA Modulus N (Decimal or 0xHex — arbitrary precision)</label>
+          <input id="cr_n" value="90581" />
+          <label>Public Exponent e</label>
+          <input id="cr_e" value="17993" />
+          <button onclick="runCrypto('rsa')">Run RSA Weakness Audit</button>
         </div>
         <div>
-          <label>Filter Severity</label>
-          <select id="aud_filter" onchange="renderAuditTable()">
-            <option value="all">All Severities</option>
-            <option value="critical">Critical</option>
-            <option value="high">High</option>
-            <option value="medium">Medium</option>
-            <option value="low">Low</option>
-          </select>
+          <label>NIST SP 800-22 / LFSR Hex Bytes (min 16 bytes for NIST)</label>
+          <input id="cr_hex" value="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" />
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button onclick="runCrypto('nist')">NIST Randomness Suite</button>
+            <button class="secondary" onclick="runCrypto('lfsr')">Berlekamp-Massey LFSR</button>
+          </div>
+        </div>
+        <div>
+          <label>LLL Lattice Basis (JSON 2D array)</label>
+          <input id="cr_basis" value="[[1,127],[0,3233]]" />
+          <button onclick="runCrypto('lll')">Run LLL Lattice Reduction</button>
         </div>
       </div>
-      <button onclick="runAudit()" data-i18n="btn_scan_src">بدء الفحص الساكن</button>
-      <div id="aud_status"></div>
+      <pre id="cr_out"></pre>
+    </div>
+  </section>
+
+  <!-- Hardware & Protocol Analyzer -->
+  <section id="pane-hardware" class="pane">
+    <div class="grid">
+      <div class="card">
+        <h2 data-i18n="hw_title">استكشاف العتاد المتصل ومحلل ناقلات المنطق (UART / SPI / I2C)</h2>
+        <button onclick="runHwDiscover()">Passive Device Discovery (COM / USB SDR / Probes)</button>
+        <pre id="hw_disc_out" style="margin-top:10px;"></pre>
+        <label>VCD Logic Capture Path</label>
+        <input id="hw_vcd" value="./demo_lab/uart_demo.vcd" />
+        <label>Bus Protocol</label>
+        <select id="hw_bus">
+          <option value="uart">UART 8N1 (Auto-Baud)</option>
+          <option value="spi">SPI (SCLK/MOSI/MISO/CS)</option>
+          <option value="i2c">I2C (SCL/SDA)</option>
+        </select>
+        <button onclick="runHwDecode()">Decode VCD Bus</button>
+        <pre id="hw_dec_out" style="margin-top:10px;"></pre>
+      </div>
+      <div class="card">
+        <h2>محلل حزم البروتوكولات (.pcap / .csv)</h2>
+        <label>Capture Path</label>
+        <input id="proto_path" value="./demo_lab/protocol_demo.csv" />
+        <button onclick="runProtocol()">Analyze Capture</button>
+        <div class="metrics" id="proto_metrics"></div>
+        <pre id="proto_out"></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- Hardware Source & Binary Firmware Audit -->
+  <section id="pane-audit" class="pane">
+    <div class="grid">
+      <div class="card">
+        <h2 data-i18n="audit_title">الفحص الساكن للكود والعتاد (SARIF / CWE)</h2>
+        <label>Local Source Directory</label>
+        <input id="aud_path" placeholder="./demo_lab/sample_firmware" />
+        <select id="aud_filter" onchange="renderAuditTable()">
+          <option value="all">All Severities</option>
+          <option value="critical">Critical</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+        </select>
+        <button onclick="runAudit()">Run Static Scan</button>
+        <div id="aud_status"></div>
+      </div>
+      <div class="card">
+        <h2>فاحص البرمجيات الثابتة الثنائية و ELF Hardening</h2>
+        <label>Firmware Binary Path (.bin / .elf)</label>
+        <input id="fw_path" placeholder="./target/debug/iq-research-workbench.exe" />
+        <button onclick="runFirmware()">Inspect Binary &amp; ELF Flags</button>
+        <pre id="fw_out" style="margin-top:10px;"></pre>
+      </div>
     </div>
     <div id="aud_results" class="card" style="display:none;">
       <div class="metrics" id="aud_metrics"></div>
@@ -329,11 +406,9 @@ pre {
   <section id="pane-forensic" class="pane">
     <div class="grid">
       <div class="card">
-        <h2 data-i18n="ev_title">توثيق والتحقق من الأدلة (SHA-256)</h2>
-        <label>Evidence Directory</label>
-        <input id="f_root" placeholder="./demo_lab/sample_firmware" />
-        <label>Manifest JSON Path</label>
-        <input id="f_manifest" placeholder="./demo_lab/manifest.json" />
+        <h2>توثيق والتحقق من الأدلة (SHA-256)</h2>
+        <label>Evidence Directory</label><input id="f_root" placeholder="./demo_lab/sample_firmware" />
+        <label>Manifest JSON Path</label><input id="f_manifest" placeholder="./demo_lab/manifest.json" />
         <div style="display:flex; gap:8px;">
           <button onclick="runInventory()">Create Manifest</button>
           <button class="secondary" onclick="runVerifyManifest()">Verify Manifest</button>
@@ -341,25 +416,30 @@ pre {
         <pre id="f_out" style="margin-top:12px;"></pre>
       </div>
       <div class="card">
-        <h2 data-i18n="led_title">التحقق من سجل التدقيق المتسلسل</h2>
-        <label>Ledger JSONL Path</label>
-        <input id="l_path" placeholder="./demo_lab/audit_ledger.jsonl" />
+        <h2>سجل التدقيق المتسلسل المشفر (Hash-Chained Ledger)</h2>
+        <label>Ledger JSONL Path</label><input id="l_path" placeholder="./demo_lab/audit_ledger.jsonl" />
         <button onclick="runVerifyLedger()">Verify Hash Chain</button>
         <pre id="l_out" style="margin-top:12px;"></pre>
       </div>
     </div>
   </section>
 
-  <!-- Quantum Education -->
+  <!-- Quantum Simulator -->
   <section id="pane-quantum" class="pane">
     <div class="card">
-      <h2 data-i18n="q_title">محاكاة كيوبت مفرد تعليمية</h2>
+      <h2>محرك الحوسبة الكمية وبروتوكول BB84 (متعدد الكيوبت من الصفر)</h2>
       <div class="grid">
-        <div><label>Gates (H,X,Y,Z,S,T)</label><input id="q_gates" value="H,T,H" /></div>
-        <div><label>Theta (rad)</label><input id="q_theta" value="0" /></div>
-        <div><label>Phi (rad)</label><input id="q_phi" value="0" /></div>
+        <div>
+          <label>Qubit Count (1 for Bloch mode, 2..8 for circuit)</label><input id="q_num" value="2" />
+          <label>Gates / Ops (e.g. "H 0, CNOT 0 1" or "QFT")</label><input id="q_gates" value="H 0, CNOT 0 1" />
+          <button onclick="runQuantumCircuit()">Run Circuit</button>
+        </div>
+        <div>
+          <label>BB84 Photons</label><input id="q_photons" value="1000" />
+          <label>Eve Eavesdrop Ratio (0.0 - 1.0)</label><input id="q_eve" value="0.5" />
+          <button class="secondary" onclick="runBb84()">Simulate BB84 QBER</button>
+        </div>
       </div>
-      <button onclick="runQuantum()">Simulate</button>
       <div class="metrics" id="q_metrics" style="margin-top:12px;"></div>
       <pre id="q_out"></pre>
     </div>
@@ -369,72 +449,14 @@ pre {
 <script>
 let lang = 'ar';
 let lastAssessReport = null;
+let lastAiReport = null;
 let lastAuditData = null;
-
-const i18n = {
-  ar: {
-    title: 'منصة فريق الأحمر لأمن العتاد وإشارات IQ',
-    subtitle: 'أداة قانونية تعمل محلياً (Offline) لفحص مؤشرات ثغرات العتاد، الآثار الفيزيائية، وإشارات IQ',
-    btn_demo: 'توليد بيانات مختبر تجريبية',
-    legal_notice: '⚖️ وضع التشغيل القانوني المصرح به فقط: تحليل محلي للملفات بدون إرسال RF أو استغلال أو اتصال بأهداف خارجية.',
-    tab_assess: 'التقييم الشامل', tab_iq: 'محلل إشارات IQ', tab_phys: 'فحص الآثار الفيزيائية',
-    tab_audit: 'تدقيق العتاد والبرمجيات', tab_forensic: 'الأدلة وسجل التدقيق', tab_quantum: 'محاكاة كيوبت تعليمية',
-    assess_title: 'تشغيل التقييم الأمني الشامل للعتاد (Unified Hardware Assessment)',
-    iq_title: 'تحليل ثغرات وجودة إشارة IQ الفيزيائية',
-    phys_title: 'فحص الآثار الفيزيائية (الطاقة / الكهرومغناطيسية / الخلل)',
-    audit_title: 'الفحص الساكن لثغرات العتاد والبرمجيات الثابتة',
-    ev_title: 'توثيق والتحقق من الأدلة (SHA-256)',
-    led_title: 'التحقق من سجل التدقيق المتسلسل',
-    q_title: 'محاكاة كيوبت مفرد تعليمية',
-    lbl_scope: 'ملف التفويض القانوني (scope.json)',
-    lbl_iq: 'ملف إشارة IQ (CSV/NPY/CF32/CS8/CU8)',
-    lbl_rate: 'معدل العينات (Hz)',
-    lbl_phys: 'ملف الأثر الفيزيائي (CSV)',
-    lbl_ref: 'ملف المرجع الفيزيائي (اختياري)',
-    lbl_src: 'مجلد الكود / إعدادات العتاد',
-    lbl_ledger: 'سجل التدقيق المشفر (JSONL اختياري)',
-    lbl_html_out: 'مسار تصدير التقرير (HTML/MD/SARIF)',
-    lbl_thresh: 'عتبة الشذوذ (MAD Threshold)',
-    btn_run_assess: 'تشغيل التقييم',
-    btn_analyze: 'تحليل الإشارة', btn_scan_phys: 'فحص الأثر الفيزيائي', btn_scan_src: 'بدء الفحص الساكن'
-  },
-  en: {
-    title: 'IQ Hardware Red-Team Security Workbench',
-    subtitle: 'Offline legal workbench for hardware audit indicators, physical side-channel screening, and IQ analysis',
-    btn_demo: 'Generate Demo Lab Data',
-    legal_notice: '⚖️ Authorized Legal Mode Only: Offline local file analysis with zero RF transmission or device exploitation.',
-    tab_assess: 'Unified Assessment', tab_iq: 'IQ Signal Analyzer', tab_phys: 'Physical Trace',
-    tab_audit: 'Hardware/FW Audit', tab_forensic: 'Forensics & Ledger', tab_quantum: 'Qubit Sim',
-    assess_title: 'Unified Hardware Red-Team Assessment',
-    iq_title: 'IQ Signal Quality & RF Anomaly Screening',
-    phys_title: 'Physical Measurement Trace Screening (Power / EM / Glitch)',
-    audit_title: 'Static Hardware & Firmware Security Review',
-    ev_title: 'Evidence Integrity Manifest (SHA-256)',
-    led_title: 'Tamper-Evident Audit Ledger Verification',
-    q_title: 'Educational Single-Qubit Simulator',
-    lbl_scope: 'Legal Authorization Scope (scope.json)',
-    lbl_iq: 'IQ Capture File (CSV/NPY/CF32/CS8/CU8)',
-    lbl_rate: 'Sample Rate (Hz)',
-    lbl_phys: 'Physical Trace CSV',
-    lbl_ref: 'Reference Trace CSV (optional)',
-    lbl_src: 'Firmware / Hardware Source Dir',
-    lbl_ledger: 'Audit Ledger JSONL (optional)',
-    lbl_html_out: 'Report Export Base Path',
-    lbl_thresh: 'MAD Outlier Threshold',
-    btn_run_assess: 'Run Assessment',
-    btn_analyze: 'Analyze IQ', btn_scan_phys: 'Scan Trace', btn_scan_src: 'Run Static Scan'
-  }
-};
 
 function toggleLang() {
   lang = lang === 'ar' ? 'en' : 'ar';
   document.documentElement.lang = lang;
   document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
   document.getElementById('langBtn').textContent = lang === 'ar' ? 'English' : 'العربية';
-  document.querySelectorAll('[data-i18n]').forEach(el => {
-    const k = el.getAttribute('data-i18n');
-    if (i18n[lang][k]) el.textContent = i18n[lang][k];
-  });
 }
 
 function showTab(id, btn) {
@@ -471,23 +493,65 @@ async function generateDemo() {
   try {
     const d = await postJson('/api/sample', { output_dir: './demo_lab' });
     const f = d.files;
+    document.getElementById('ai_ws').value = './demo_lab';
+    document.getElementById('ai_scope').value = f.scope;
     document.getElementById('a_scope').value = f.scope;
     document.getElementById('a_iq').value = f.iq_capture;
     document.getElementById('a_phys').value = f.physical_trace;
     document.getElementById('a_ref').value = f.physical_reference;
     document.getElementById('a_src').value = f.firmware_dir;
-    document.getElementById('a_ledger').value = './demo_lab/audit_ledger.jsonl';
-    document.getElementById('a_html').value = './demo_lab/assessment_report.html';
     document.getElementById('iq_path').value = f.iq_capture;
     document.getElementById('p_path').value = f.physical_trace;
     document.getElementById('p_ref').value = f.physical_reference;
+    document.getElementById('hw_vcd').value = f.uart_vcd;
+    document.getElementById('proto_path').value = f.protocol_csv;
     document.getElementById('aud_path').value = f.firmware_dir;
     document.getElementById('f_root').value = f.firmware_dir;
-    document.getElementById('f_manifest').value = './demo_lab/manifest.json';
-    document.getElementById('l_path').value = './demo_lab/audit_ledger.jsonl';
     document.getElementById('scopeBadge').textContent = 'Scope: ' + f.scope;
-    setStatus('a_status', 'Demo lab files ready in ./demo_lab', true);
-  } catch (e) { setStatus('a_status', e.message, false); }
+    setStatus('ai_status', 'Demo workspace generated in ./demo_lab', true);
+  } catch (e) { setStatus('ai_status', e.message, false); }
+}
+
+async function runAiAudit() {
+  try {
+    const d = await postJson('/api/ai/audit', {
+      workspace: document.getElementById('ai_ws').value,
+      scope_file: document.getElementById('ai_scope').value || null,
+      ledger_file: document.getElementById('ai_ledger').value || null,
+      sample_rate_hz: 2000000
+    });
+    lastAiReport = d;
+    document.getElementById('ai_results').style.display = 'block';
+    document.getElementById('scopeBadge').textContent = d.legal_authorized ? 'Scope: Verified ✓' : 'Scope: Unverified';
+    renderMetrics('ai_metrics', [
+      ['AI Risk Score', d.summary.overall_score + '/100'],
+      ['Risk Band', d.summary.risk_level.toUpperCase()],
+      ['Correlated Hypotheses', d.summary.hypothesis_count],
+      ['IQ / VCD / Matrices', `${d.summary.artifacts_scanned.iq_files} / ${d.summary.artifacts_scanned.logic_vcd_files} / ${d.summary.artifacts_scanned.side_channel_matrices}`]
+    ]);
+    document.getElementById('ai_hyps').innerHTML = (d.correlated_hypotheses || [])
+      .map(h => `<div style="margin:6px 0;"><span class="pill ${h.severity}">${h.id} (${Math.round(h.confidence*100)}%)</span> ${h.evidence} — <i>${h.remediation}</i></div>`)
+      .join('');
+    document.getElementById('ai_json').textContent = JSON.stringify(d, null, 2);
+    await askOfflineAi();
+    setStatus('ai_status', 'Autonomous workspace inspection complete.', true);
+  } catch (e) { setStatus('ai_status', e.message, false); }
+}
+
+async function askOfflineAi() {
+  if (!lastAiReport) return;
+  const res = await postJson('/api/ai/diagnose', {
+    report: lastAiReport,
+    question: document.getElementById('ai_q').value || null,
+    lang
+  });
+  document.getElementById('ai_diag').textContent = JSON.stringify(res, null, 2);
+}
+
+async function exportAiHtml() {
+  if (!lastAiReport) return;
+  const res = await postJson('/api/export-html', { output_path: './demo_lab/ai_report.html', report: lastAiReport });
+  setStatus('ai_status', 'Exported HTML to ' + res.output_path, true);
 }
 
 async function runAssess() {
@@ -504,28 +568,26 @@ async function runAssess() {
     });
     lastAssessReport = data;
     document.getElementById('a_results').style.display = 'block';
-    document.getElementById('scopeBadge').textContent = data.legal_authorized ? 'Scope: Verified ✓' : 'Scope: Unverified';
     renderMetrics('a_metrics', [
       ['Overall Score', data.summary.overall_score + '/100'],
       ['Risk Level', data.summary.risk_level.toUpperCase()],
       ['Authorized Scope', data.legal_authorized ? 'Verified' : 'Missing'],
       ['Report SHA-256', (data.report_sha256 || '').slice(0, 12) + '…']
     ]);
-    document.getElementById('a_highlights').innerHTML = (data.summary.highlights || [])
-      .map(h => `<li>${h}</li>`).join('');
+    document.getElementById('a_highlights').innerHTML = (data.summary.highlights || []).map(h => `<li>${h}</li>`).join('');
     document.getElementById('a_json').textContent = JSON.stringify(data, null, 2);
-    setStatus('a_status', 'Assessment completed.', true);
+    setStatus('a_status', 'Assessment complete.', true);
   } catch (e) { setStatus('a_status', e.message, false); }
 }
 
 async function exportReport(fmt) {
   try {
-    if (!lastAssessReport) throw new Error('Run an assessment first.');
+    if (!lastAssessReport) throw new Error('Run assessment first.');
     let out = document.getElementById('a_html').value || './demo_lab/assessment_report.html';
     if (fmt === 'markdown') out = out.replace(/\.[^/.]+$/, '') + '.md';
     if (fmt === 'sarif') out = out.replace(/\.[^/.]+$/, '') + '.sarif';
     const res = await postJson('/api/export-' + fmt, { output_path: out, report: lastAssessReport });
-    setStatus('a_status', `Exported ${fmt.toUpperCase()} report to ${res.output_path}`, true);
+    setStatus('a_status', `Exported ${fmt.toUpperCase()} to ${res.output_path}`, true);
   } catch (e) { setStatus('a_status', e.message, false); }
 }
 
@@ -539,25 +601,17 @@ function drawPoints(canvasId, pts, color='#38bdf8', scatter=false) {
     if (x < minX) minX = x; if (x > maxX) maxX = x;
     if (y < minY) minY = y; if (y > maxY) maxY = y;
   }
-  const pad = 18;
-  const rx = (maxX - minX) || 1, ry = (maxY - minY) || 1;
+  const pad = 18, rx = (maxX - minX) || 1, ry = (maxY - minY) || 1;
   const mapX = x => pad + ((x - minX) / rx) * (c.width - 2*pad);
   const mapY = y => c.height - pad - ((y - minY) / ry) * (c.height - 2*pad);
-
   ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(pad, c.height/2); ctx.lineTo(c.width-pad, c.height/2); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(c.width/2, pad); ctx.lineTo(c.width/2, c.height-pad); ctx.stroke();
-
   if (scatter) {
     ctx.fillStyle = color;
     for (const [x,y] of pts) ctx.fillRect(mapX(x)-2, mapY(y)-2, 4, 4);
   } else {
-    ctx.strokeStyle = color; ctx.lineWidth = 1.6;
-    ctx.beginPath();
-    pts.forEach(([x,y], i) => {
-      const px = mapX(x), py = mapY(y);
-      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-    });
+    ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.beginPath();
+    pts.forEach(([x,y], i) => i === 0 ? ctx.moveTo(mapX(x), mapY(y)) : ctx.lineTo(mapX(x), mapY(y)));
     ctx.stroke();
   }
 }
@@ -567,16 +621,12 @@ function drawSpectrogram(canvasId, matrix) {
   const ctx = c.getContext('2d');
   ctx.clearRect(0, 0, c.width, c.height);
   if (!matrix || !matrix.length) return;
-  const rows = matrix.length, cols = matrix[0].length;
-  const cw = c.width / cols, ch = c.height / rows;
+  const rows = matrix.length, cols = matrix[0].length, cw = c.width / cols, ch = c.height / rows;
   for (let r = 0; r < rows; r++) {
     for (let col = 0; col < cols; col++) {
       const db = Math.max(-60, Math.min(0, matrix[r][col]));
       const norm = (db + 60) / 60;
-      const red = Math.floor(norm * 255);
-      const green = Math.floor(Math.sin(norm * Math.PI) * 210);
-      const blue = Math.floor((1 - norm) * 160);
-      ctx.fillStyle = `rgb(${red},${green},${blue})`;
+      ctx.fillStyle = `rgb(${Math.floor(norm*255)},${Math.floor(Math.sin(norm*Math.PI)*210)},${Math.floor((1-norm)*160)})`;
       ctx.fillRect(col * cw, r * ch, Math.ceil(cw), Math.ceil(ch));
     }
   }
@@ -593,16 +643,13 @@ async function runIq() {
     const m = d.metrics;
     renderMetrics('iq_metrics', [
       ['Anomaly Score', m.anomaly_score + '/100'],
-      ['IQ Gain Imbal (dB)', m.iq_gain_imbalance_db.toFixed(2)],
-      ['IQ Phase Skew (deg)', m.iq_phase_skew_deg.toFixed(2)],
-      ['DC Offset Ratio', (m.dc_offset_ratio * 100).toFixed(1) + '%'],
+      ['Modulation AMC', m.modulation_classification || m.signal_character],
+      ['IRR (dB)', (m.iq_image_rejection_db || 0).toFixed(1)],
       ['Est. SNR (dB)', m.estimated_snr_db.toFixed(1)],
       ['SFDR (dB)', m.sfdr_db.toFixed(1)],
-      ['Bursts', m.burst_count],
-      ['Character', m.signal_character]
+      ['CA-CFAR Spurs', m.cfar_spur_count]
     ]);
-    document.getElementById('iq_flags').innerHTML = (d.anomaly_flags || [])
-      .map(f => `<span class="pill high">${f}</span>`).join('');
+    document.getElementById('iq_flags').innerHTML = (d.anomaly_flags || []).map(f => `<span class="pill high">${f}</span>`).join('');
     drawPoints('c_constellation', d.preview.iq_points, '#38bdf8', true);
     drawPoints('c_spectrum', d.preview.spectrum_bins, '#34d399', false);
     drawPoints('c_envelope', d.preview.envelope_bins, '#fbbf24', false);
@@ -613,28 +660,75 @@ async function runIq() {
 
 async function runPhys() {
   try {
+    const matrixMode = document.getElementById('p_mode').value === 'matrix';
     const d = await postJson('/api/analyze-physical', {
       trace: document.getElementById('p_path').value,
       reference: document.getElementById('p_ref').value || null,
-      threshold: parseFloat(document.getElementById('p_thresh').value) || 6.0
+      threshold: parseFloat(document.getElementById('p_thresh').value) || 6.0,
+      matrix: matrixMode
     });
     document.getElementById('p_results').style.display = 'block';
-    const m = d.metrics;
-    renderMetrics('p_metrics', [
-      ['Anomaly Score', m.anomaly_score + '/100'],
-      ['MAD Outliers', m.robust_outlier_count],
-      ['Periodic Power', (m.periodic_power_ratio * 100).toFixed(1) + '%'],
-      ['Autocorr Peak', m.autocorrelation_peak.toFixed(2)],
-      ['Step Changes', m.change_point_count],
-      ['Welch t-stat', d.comparison && d.comparison.welch_t_statistic != null ? d.comparison.welch_t_statistic.toFixed(2) : 'N/A'],
-      ['Ref Divergence', d.comparison ? d.comparison.divergence_score + '/100' : 'N/A']
-    ]);
-    document.getElementById('p_flags').innerHTML = (d.anomaly_flags || [])
-      .map(f => `<span class="pill high">${f}</span>`).join('');
-    drawPoints('c_waveform', d.preview.waveform, '#38bdf8', false);
-    drawPoints('c_phys_spec', d.preview.spectrum_bins, '#34d399', false);
-    setStatus('p_status', 'Physical trace screening complete.', true);
+    if (matrixMode) {
+      renderMetrics('p_metrics', [
+        ['TVLA Leak Detected', d.tvla_leakage_detected],
+        ['Max |Welch t|', d.max_abs_welch_t.toFixed(2)],
+        ['Max NICV', d.max_nicv.toFixed(3)],
+        ['Max SNR', d.max_snr.toFixed(2)]
+      ]);
+      drawPoints('c_waveform', d.t_curve_preview, '#f87171', false);
+    } else {
+      const m = d.metrics;
+      renderMetrics('p_metrics', [
+        ['Anomaly Score', m.anomaly_score + '/100'],
+        ['MAD Outliers', m.robust_outlier_count],
+        ['CUSUM Alarms', m.cusum_alarm_count],
+        ['Periodic Ratio', (m.periodic_power_ratio * 100).toFixed(1) + '%']
+      ]);
+      drawPoints('c_waveform', d.preview.waveform, '#38bdf8', false);
+      drawPoints('c_phys_spec', d.preview.spectrum_bins, '#34d399', false);
+    }
+    setStatus('p_status', 'Physical analysis complete.', true);
   } catch (e) { setStatus('p_status', e.message, false); }
+}
+
+async function runCrypto(op) {
+  try {
+    const res = await postJson('/api/crypto', {
+      op,
+      modulus: document.getElementById('cr_n').value,
+      exponent: document.getElementById('cr_e').value,
+      data_hex: document.getElementById('cr_hex').value,
+      basis_json: document.getElementById('cr_basis').value
+    });
+    document.getElementById('cr_out').textContent = JSON.stringify(res, null, 2);
+  } catch (e) { document.getElementById('cr_out').textContent = e.message; }
+}
+
+async function runHwDiscover() {
+  const res = await postJson('/api/hardware/discover', {});
+  document.getElementById('hw_disc_out').textContent = JSON.stringify(res, null, 2);
+}
+
+async function runHwDecode() {
+  try {
+    const res = await postJson('/api/hardware/decode', {
+      vcd: document.getElementById('hw_vcd').value,
+      bus: document.getElementById('hw_bus').value
+    });
+    document.getElementById('hw_dec_out').textContent = JSON.stringify(res, null, 2);
+  } catch (e) { document.getElementById('hw_dec_out').textContent = e.message; }
+}
+
+async function runProtocol() {
+  try {
+    const res = await postJson('/api/protocol', { capture: document.getElementById('proto_path').value });
+    renderMetrics('proto_metrics', [
+      ['Container', res.container || 'csv'],
+      ['Packets', res.statistics ? res.statistics.total_packets : 0],
+      ['Anomalies', res.anomaly_count || 0]
+    ]);
+    document.getElementById('proto_out').textContent = JSON.stringify(res, null, 2);
+  } catch (e) { document.getElementById('proto_out').textContent = e.message; }
 }
 
 function renderAuditTable() {
@@ -642,14 +736,7 @@ function renderAuditTable() {
   const filter = document.getElementById('aud_filter').value;
   const rows = (lastAuditData.findings || []).filter(f => filter === 'all' || f.severity === filter);
   document.getElementById('aud_tbody').innerHTML = rows.map(f =>
-    `<tr>
-      <td><span class="pill ${f.severity}">${f.severity}</span></td>
-      <td>${f.rule_id}</td>
-      <td>${f.category}</td>
-      <td>${f.cwe}</td>
-      <td><code>${f.path}:${f.line}</code></td>
-      <td>${f.recommendation}</td>
-    </tr>`
+    `<tr><td><span class="pill ${f.severity}">${f.severity}</span></td><td>${f.rule_id}</td><td>${f.category}</td><td>${f.cwe}</td><td><code>${f.path}:${f.line}</code></td><td>${f.recommendation}</td></tr>`
   ).join('');
 }
 
@@ -658,16 +745,21 @@ async function runAudit() {
     const d = await postJson('/api/audit', { root: document.getElementById('aud_path').value });
     lastAuditData = d;
     document.getElementById('aud_results').style.display = 'block';
-    const m = d.metrics;
     renderMetrics('aud_metrics', [
-      ['Risk Score', m.risk_score + '/100'],
-      ['Scanned Files', m.scanned_files],
-      ['Total Findings', m.finding_count],
-      ['Warnings', m.warning_count]
+      ['Risk Score', d.metrics.risk_score + '/100'],
+      ['Scanned Files', d.metrics.scanned_files],
+      ['Findings', d.metrics.finding_count]
     ]);
     renderAuditTable();
     setStatus('aud_status', 'Static audit complete.', true);
   } catch (e) { setStatus('aud_status', e.message, false); }
+}
+
+async function runFirmware() {
+  try {
+    const res = await postJson('/api/firmware', { firmware: document.getElementById('fw_path').value });
+    document.getElementById('fw_out').textContent = JSON.stringify(res, null, 2);
+  } catch (e) { document.getElementById('fw_out').textContent = e.message; }
 }
 
 async function runInventory() {
@@ -697,16 +789,26 @@ async function runVerifyLedger() {
   } catch (e) { document.getElementById('l_out').textContent = e.message; }
 }
 
-async function runQuantum() {
+async function runQuantumCircuit() {
+  try {
+    const nq = parseInt(document.getElementById('q_num').value) || 1;
+    const d = await postJson('/api/quantum', {
+      qubits: nq,
+      gates: document.getElementById('q_gates').value
+    });
+    document.getElementById('q_out').textContent = JSON.stringify(d, null, 2);
+  } catch (e) { document.getElementById('q_out').textContent = e.message; }
+}
+
+async function runBb84() {
   try {
     const d = await postJson('/api/quantum', {
-      gates: document.getElementById('q_gates').value,
-      theta: parseFloat(document.getElementById('q_theta').value) || 0,
-      phi: parseFloat(document.getElementById('q_phi').value) || 0
+      bb84_photons: parseInt(document.getElementById('q_photons').value) || 1000,
+      eve_ratio: parseFloat(document.getElementById('q_eve').value) || 0.0
     });
     renderMetrics('q_metrics', [
-      ['P(|0>)', (d.probabilities['0'] * 100).toFixed(2) + '%'],
-      ['P(|1>)', (d.probabilities['1'] * 100).toFixed(2) + '%']
+      ['QBER', (d.qber * 100).toFixed(2) + '%'],
+      ['Eavesdropper Flagged', d.eavesdropper_detected]
     ]);
     document.getElementById('q_out').textContent = JSON.stringify(d, null, 2);
   } catch (e) { document.getElementById('q_out').textContent = e.message; }

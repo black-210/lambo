@@ -1,28 +1,32 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
-use iq_research_workbench::ai::start_chat;
+use iq_research_workbench::ai::{autonomous_workspace_audit, diagnose_report_offline, start_chat};
 use iq_research_workbench::cryptanalysis::{
-    aes_ctr_reuse, coppersmith_stub, entropy_score, frequency_analysis, rsa_factor,
-    vigenere_crack, xor_key_recovery,
+    aes_ctr_reuse, berlekamp_massey_gf2, crib_drag, detect_ecb_blocks, entropy_score,
+    frequency_analysis, lll_reduce, lll_subset_sum_audit, nist_randomness_suite, rsa_audit,
+    rsa_batch_gcd, rsa_common_modulus_check, vigenere_crack, xor_key_recovery,
 };
+use iq_research_workbench::hardware::{
+    decode_i2c_vcd, decode_spi_vcd, decode_uart_vcd, discover_local_hardware,
+};
+use iq_research_workbench::physical::analyze_trace_matrix;
 use iq_research_workbench::protocol::analyze_protocol_capture;
+use iq_research_workbench::quantum::{simulate_bb84, simulate_circuit, simulate_qubit};
 use iq_research_workbench::{
     AssessmentInput, analyze_iq, analyze_trace, assess_engagement, audit_to_sarif,
     create_manifest, create_scope_file, export_html_report, export_markdown_report,
     export_sarif_report, generate_demo_workspace, inspect_firmware_binary, launch_gui,
-    scan_source_tree, simulate_qubit, verify_audit_ledger, verify_manifest, verify_scope_file,
+    scan_source_tree, verify_audit_ledger, verify_manifest, verify_scope_file,
 };
 use serde_json::Value;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-// ─── CLI Definition ──────────────────────────────────────────────────────────
-
 #[derive(Parser)]
 #[command(
     name = "iq-workbench",
     version,
-    about = "Authorized offline hardware red-team, IQ, physical trace, cryptanalysis, protocol, and evidence workbench"
+    about = "Authorized offline hardware red-team, RF IQ, side-channel, hardware bus, cryptanalysis, autonomous AI, and forensics workbench"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -31,7 +35,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Analyze an IQ capture (.csv, .npy, .cf32, .cs8, .cu8)
+    /// Analyze an IQ capture (.csv, .npy, .cf32, .cs16, .cs8, .cu8, .wav, .sigmf-meta)
     Analyze {
         iq_file: PathBuf,
         #[arg(long)]
@@ -39,13 +43,19 @@ enum Command {
         #[command(flatten)]
         output: OutputArg,
     },
-    /// Screen a physical measurement trace (.csv)
+    /// Screen a physical trace (.csv) or multi-trace side-channel matrix (--matrix)
     Physical {
         trace: PathBuf,
         #[arg(long)]
         reference: Option<PathBuf>,
         #[arg(long, default_value_t = 6.0)]
         threshold: f64,
+        /// Treat input CSV as a multi-trace labeled matrix (`label,s0,s1,...`) for TVLA/NICV/SNR
+        #[arg(long)]
+        matrix: bool,
+        /// Cross-correlation jitter alignment half-window (samples) when --matrix is set
+        #[arg(long, default_value_t = 0)]
+        align_window: usize,
         #[command(flatten)]
         output: OutputArg,
     },
@@ -67,23 +77,23 @@ enum Command {
         #[command(subcommand)]
         command: ScopeCommand,
     },
-    /// Run a unified hardware red-team assessment
+    /// Run a unified hardware red-team assessment across IQ, physical trace, and source code
     Assess(Box<AssessArgs>),
     /// Verify a tamper-evident SHA-256 audit ledger (.jsonl)
     Ledger { ledger: PathBuf },
-    /// Generate synthetic lab demo files
+    /// Generate legal synthetic lab demo files for testing CLI & GUI
     Sample {
         #[arg(long, default_value = "./demo_lab")]
         output_dir: PathBuf,
     },
-    /// Launch the local browser-based GUI (127.0.0.1)
+    /// Launch the local browser-based graphical workbench (bound strictly to 127.0.0.1)
     Gui {
         #[arg(long, default_value_t = 8420)]
         port: u16,
         #[arg(long)]
         no_open: bool,
     },
-    /// Educational single-qubit state-vector simulator
+    /// Quantum simulator (single-qubit, multi-qubit circuits with --qubits, or --bb84)
     Quantum {
         #[arg(long, default_value = "")]
         gates: String,
@@ -91,68 +101,154 @@ enum Command {
         theta: f64,
         #[arg(long, default_value_t = 0.0)]
         phi: f64,
+        /// Number of qubits for multi-qubit circuit mode (e.g. --qubits 2 --gates "H 0,CNOT 0 1")
+        #[arg(long)]
+        qubits: Option<usize>,
+        /// Run BB84 QBER channel eavesdropper simulation with N photons
+        #[arg(long)]
+        bb84_photons: Option<usize>,
+        #[arg(long, default_value_t = 0.0)]
+        eve_ratio: f64,
         #[command(flatten)]
         output: OutputArg,
     },
-    /// Offline binary firmware surface inspector
+    /// Offline binary firmware surface & ELF hardening inspector
     Firmware {
         firmware: PathBuf,
         #[command(flatten)]
         output: OutputArg,
     },
-    /// Discuss a saved JSON report with an AI provider
+    /// Discuss a saved JSON report (`--provider offline|gemini|openai-compatible`)
     Chat(ChatArgs),
-
-    // ── NEW ──────────────────────────────────────────────────────────────
-
-    /// Cryptanalysis research utilities (RSA, AES-CTR, Vigenère, XOR, entropy)
+    /// Cryptanalysis & cryptographic weakness auditing (from-scratch BigUint, LLL, NIST, LFSR)
     Crypto {
         #[command(subcommand)]
         command: CryptoCommand,
     },
-    /// Analyze a protocol capture CSV for anomalies
+    /// Passive hardware interface discovery & VCD logic-analyzer bus decoders (UART, SPI, I2C)
+    Hardware {
+        #[command(subcommand)]
+        command: HardwareCommand,
+    },
+    /// Offline protocol capture analyzer (.pcap binary or .csv)
     Protocol {
         capture: PathBuf,
         #[command(flatten)]
         output: OutputArg,
     },
+    /// Autonomous Physical & Hardware Security AI Engine (offline auto-discovery & correlation)
+    Ai {
+        #[command(subcommand)]
+        command: AiCommand,
+    },
 }
 
 #[derive(Subcommand)]
 enum CryptoCommand {
-    /// Factor a small RSA modulus (trial-division + Pollard-Rho)
-    Rsa {
+    /// Multi-stage RSA public-key weakness audit (arbitrary-precision Fermat, p-1, Rho, Wiener)
+    RsaAudit {
         #[arg(long)]
-        modulus: u64,
-        #[arg(long, default_value_t = 65537)]
-        exponent: u64,
+        modulus: String,
+        #[arg(long, default_value = "65537")]
+        exponent: String,
+        #[arg(long, default_value_t = 50000)]
+        max_steps: usize,
         #[command(flatten)]
         output: OutputArg,
     },
-    /// Detect AES-CTR keystream reuse
+    /// Audit multiple RSA moduli (comma-separated or file lines) for shared primes (Batch GCD)
+    BatchGcd {
+        #[arg(long, num_args = 2..)]
+        moduli: Vec<String>,
+        #[command(flatten)]
+        output: OutputArg,
+    },
+    /// Check common-modulus vulnerability across (N, e1, e2)
+    CommonModulus {
+        #[arg(long)]
+        modulus: String,
+        #[arg(long)]
+        e1: String,
+        #[arg(long)]
+        e2: String,
+        #[arg(long)]
+        c1: Option<String>,
+        #[arg(long)]
+        c2: Option<String>,
+        #[command(flatten)]
+        output: OutputArg,
+    },
+    /// LLL Lattice Basis Reduction from JSON 2D array (e.g. '[[1,127],[0,3233]]')
+    Lll {
+        #[arg(long)]
+        basis_json: String,
+        #[arg(long, default_value_t = 0.99)]
+        delta: f64,
+        #[command(flatten)]
+        output: OutputArg,
+    },
+    /// LLL low-density subset-sum / knapsack audit
+    LllSubset {
+        #[arg(long, value_delimiter = ',')]
+        weights: Vec<i64>,
+        #[arg(long)]
+        target: i64,
+        #[command(flatten)]
+        output: OutputArg,
+    },
+    /// Berlekamp-Massey GF(2) minimal LFSR linear complexity analyzer
+    Lfsr {
+        file: PathBuf,
+        #[command(flatten)]
+        output: OutputArg,
+    },
+    /// NIST SP 800-22 Statistical Randomness Suite (5 tests with real p-values)
+    Nist {
+        file: PathBuf,
+        #[command(flatten)]
+        output: OutputArg,
+    },
+    /// Detect deterministic AES/DES ECB repeated ciphertext blocks
+    Ecb {
+        file: PathBuf,
+        #[arg(long, default_value_t = 16)]
+        block_size: usize,
+        #[command(flatten)]
+        output: OutputArg,
+    },
+    /// Detect AES-CTR keystream reuse via pairwise XOR
     AesCtr {
         #[arg(long)]
         nonce: String,
         #[arg(long)]
         key: String,
-        #[arg(long, num_args = 1..)]
+        #[arg(long, num_args = 2..)]
         ciphertexts: Vec<PathBuf>,
         #[command(flatten)]
         output: OutputArg,
     },
-    /// Frequency analysis on a binary file
+    /// Slide a known plaintext crib across XOR of two reused-keystream files
+    CribDrag {
+        file1: PathBuf,
+        file2: PathBuf,
+        #[arg(long)]
+        crib: String,
+        #[command(flatten)]
+        output: OutputArg,
+    },
+    /// Byte frequency & Index of Coincidence analysis
     Freq {
         file: PathBuf,
         #[command(flatten)]
         output: OutputArg,
     },
-    /// Shannon entropy of a binary file
+    /// Shannon entropy score
     Entropy {
         file: PathBuf,
         #[command(flatten)]
         output: OutputArg,
     },
-    /// Crack a Vigenère cipher (uppercase A-Z text file)
+    /// Vigenère Kasiski + IC + chi-squared crack
     Vigenere {
         file: PathBuf,
         #[arg(long, default_value_t = 20)]
@@ -160,13 +256,88 @@ enum CryptoCommand {
         #[command(flatten)]
         output: OutputArg,
     },
-    /// Recover a repeating XOR key
+    /// Repeating-key XOR key recovery (`--key-len 0` auto-estimates via Hamming distance)
     Xor {
         file: PathBuf,
-        #[arg(long)]
+        #[arg(long, default_value_t = 0)]
         key_len: usize,
         #[command(flatten)]
         output: OutputArg,
+    },
+}
+
+#[derive(Subcommand)]
+enum HardwareCommand {
+    /// Passive read-only OS discovery of attached serial COM ports & USB SDR/logic/debug interfaces
+    Discover {
+        #[command(flatten)]
+        output: OutputArg,
+    },
+    /// Decode UART 8N1 serial traffic from a .vcd logic analyzer trace (auto-baud if omitted)
+    Uart {
+        vcd: PathBuf,
+        #[arg(long)]
+        channel: Option<String>,
+        #[arg(long)]
+        baud: Option<f64>,
+        #[command(flatten)]
+        output: OutputArg,
+    },
+    /// Decode synchronous SPI bus transactions from a .vcd trace
+    Spi {
+        vcd: PathBuf,
+        #[arg(long)]
+        sclk: Option<String>,
+        #[arg(long)]
+        mosi: Option<String>,
+        #[arg(long)]
+        miso: Option<String>,
+        #[arg(long)]
+        cs: Option<String>,
+        #[arg(long, default_value_t = 0)]
+        cpol: u8,
+        #[arg(long, default_value_t = 0)]
+        cpha: u8,
+        #[command(flatten)]
+        output: OutputArg,
+    },
+    /// Decode I2C START/STOP/Address/ACK/Data transactions from a .vcd trace
+    I2c {
+        vcd: PathBuf,
+        #[arg(long)]
+        scl: Option<String>,
+        #[arg(long)]
+        sda: Option<String>,
+        #[command(flatten)]
+        output: OutputArg,
+    },
+}
+
+#[derive(Subcommand)]
+enum AiCommand {
+    /// Autonomously discover & test all artifacts in a workspace and generate correlated AI report
+    Audit {
+        workspace: PathBuf,
+        #[arg(long)]
+        scope: Option<PathBuf>,
+        #[arg(long)]
+        ledger: Option<PathBuf>,
+        #[arg(long)]
+        sample_rate: Option<f64>,
+        #[arg(long)]
+        html: Option<PathBuf>,
+        #[arg(long)]
+        markdown: Option<PathBuf>,
+        #[command(flatten)]
+        output: OutputArg,
+    },
+    /// Run offline bilingual diagnostic interpreter on a saved JSON report
+    Diagnose {
+        report: PathBuf,
+        #[arg(long)]
+        question: Option<String>,
+        #[arg(long, default_value = "ar")]
+        lang: String,
     },
 }
 
@@ -234,15 +405,13 @@ struct AssessArgs {
 #[derive(Args)]
 struct ChatArgs {
     report: PathBuf,
-    #[arg(long, default_value = "gemini")]
+    #[arg(long, default_value = "offline")]
     provider: String,
     #[arg(long)]
     model: Option<String>,
     #[arg(long)]
     base_url: Option<String>,
 }
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn absolute_path(path: &Path) -> PathBuf {
     path.canonicalize()
@@ -286,13 +455,11 @@ fn read_report(path: &Path) -> Result<Value> {
         &std::fs::read(path).with_context(|| format!("Reading report {}", path.display()))?,
     )
     .context("Could not read a valid report JSON.")?;
-    if !report.get("metrics").is_some_and(Value::is_object) && !report.get("analysis").is_some() {
+    if !report.get("metrics").is_some_and(Value::is_object) && report.get("analysis").is_none() {
         bail!("Report JSON must contain a metrics object or an analysis field.");
     }
     Ok(report)
 }
-
-// ─── Dispatch ────────────────────────────────────────────────────────────────
 
 fn dispatch(command: Command) -> Result<()> {
     match command {
@@ -308,6 +475,8 @@ fn dispatch(command: Command) -> Result<()> {
             trace,
             reference,
             threshold,
+            matrix,
+            align_window,
             output,
         } => {
             let mut inputs = vec![trace.as_path()];
@@ -315,10 +484,12 @@ fn dispatch(command: Command) -> Result<()> {
                 inputs.push(reference);
             }
             ensure_output_distinct(&output.output, &inputs)?;
-            write_report(
-                analyze_trace(&trace, reference.as_deref(), threshold)?,
-                output.output.as_deref(),
-            )
+            let rep = if matrix {
+                analyze_trace_matrix(&trace, align_window)?
+            } else {
+                analyze_trace(&trace, reference.as_deref(), threshold)?
+            };
+            write_report(rep, output.output.as_deref())
         }
         Command::Forensic { command } => match command {
             ForensicCommand::Inventory { root, output } => {
@@ -398,15 +569,31 @@ fn dispatch(command: Command) -> Result<()> {
             gates,
             theta,
             phi,
+            qubits,
+            bb84_photons,
+            eve_ratio,
             output,
         } => {
-            let gates: Vec<String> = gates
-                .split(',')
-                .map(str::trim)
-                .filter(|gate| !gate.is_empty())
-                .map(str::to_owned)
-                .collect();
-            write_report(simulate_qubit(&gates, theta, phi)?, output.output.as_deref())
+            let rep = if let Some(photons) = bb84_photons {
+                simulate_bb84(photons, eve_ratio)?
+            } else if let Some(nq) = qubits {
+                let ops: Vec<String> = gates
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                simulate_circuit(nq, &ops)?
+            } else {
+                let g: Vec<String> = gates
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|gate| !gate.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                simulate_qubit(&g, theta, phi)?
+            };
+            write_report(rep, output.output.as_deref())
         }
         Command::Chat(args) => {
             let report = read_report(&args.report)?;
@@ -420,36 +607,94 @@ fn dispatch(command: Command) -> Result<()> {
         Command::Firmware { firmware, output } => {
             write_report(inspect_firmware_binary(&firmware)?, output.output.as_deref())
         }
-
-        // ── NEW: Cryptanalysis ───────────────────────────────────────────
         Command::Crypto { command } => match command {
-            CryptoCommand::Rsa {
+            CryptoCommand::RsaAudit {
                 modulus,
                 exponent,
+                max_steps,
                 output,
-            } => write_report(rsa_factor(exponent, modulus)?, output.output.as_deref()),
+            } => write_report(
+                rsa_audit(&exponent, &modulus, max_steps)?,
+                output.output.as_deref(),
+            ),
+            CryptoCommand::BatchGcd { moduli, output } => {
+                write_report(rsa_batch_gcd(&moduli)?, output.output.as_deref())
+            }
+            CryptoCommand::CommonModulus {
+                modulus,
+                e1,
+                e2,
+                c1,
+                c2,
+                output,
+            } => write_report(
+                rsa_common_modulus_check(&modulus, &e1, &e2, c1.as_deref(), c2.as_deref())?,
+                output.output.as_deref(),
+            ),
+            CryptoCommand::Lll {
+                basis_json,
+                delta,
+                output,
+            } => {
+                let basis: Vec<Vec<f64>> =
+                    serde_json::from_str(&basis_json).context("Parsing basis JSON 2D array")?;
+                write_report(lll_reduce(&basis, delta)?, output.output.as_deref())
+            }
+            CryptoCommand::LllSubset {
+                weights,
+                target,
+                output,
+            } => write_report(
+                lll_subset_sum_audit(&weights, target)?,
+                output.output.as_deref(),
+            ),
+            CryptoCommand::Lfsr { file, output } => {
+                let data = std::fs::read(&file)?;
+                write_report(berlekamp_massey_gf2(&data)?, output.output.as_deref())
+            }
+            CryptoCommand::Nist { file, output } => {
+                let data = std::fs::read(&file)?;
+                write_report(nist_randomness_suite(&data)?, output.output.as_deref())
+            }
+            CryptoCommand::Ecb {
+                file,
+                block_size,
+                output,
+            } => {
+                let data = std::fs::read(&file)?;
+                write_report(detect_ecb_blocks(&data, block_size)?, output.output.as_deref())
+            }
             CryptoCommand::AesCtr {
                 nonce,
                 key,
                 ciphertexts,
                 output,
             } => {
-                let mut cts: Vec<Vec<u8>> = Vec::new();
+                let mut cts = Vec::new();
                 for p in &ciphertexts {
-                    let data = std::fs::read(p)
-                        .with_context(|| format!("reading ciphertext {}", p.display()))?;
-                    cts.push(data);
+                    cts.push(std::fs::read(p)?);
                 }
                 write_report(aes_ctr_reuse(&nonce, &key, &cts)?, output.output.as_deref())
             }
+            CryptoCommand::CribDrag {
+                file1,
+                file2,
+                crib,
+                output,
+            } => {
+                let c1 = std::fs::read(&file1)?;
+                let c2 = std::fs::read(&file2)?;
+                write_report(
+                    crib_drag(&c1, &c2, crib.as_bytes())?,
+                    output.output.as_deref(),
+                )
+            }
             CryptoCommand::Freq { file, output } => {
-                let data = std::fs::read(&file)
-                    .with_context(|| format!("reading {}", file.display()))?;
+                let data = std::fs::read(&file)?;
                 write_report(frequency_analysis(&data)?, output.output.as_deref())
             }
             CryptoCommand::Entropy { file, output } => {
-                let data = std::fs::read(&file)
-                    .with_context(|| format!("reading {}", file.display()))?;
+                let data = std::fs::read(&file)?;
                 write_report(entropy_score(&data)?, output.output.as_deref())
             }
             CryptoCommand::Vigenere {
@@ -457,8 +702,7 @@ fn dispatch(command: Command) -> Result<()> {
                 max_key_len,
                 output,
             } => {
-                let data = std::fs::read(&file)
-                    .with_context(|| format!("reading {}", file.display()))?;
+                let data = std::fs::read(&file)?;
                 write_report(vigenere_crack(&data, max_key_len)?, output.output.as_deref())
             }
             CryptoCommand::Xor {
@@ -466,23 +710,98 @@ fn dispatch(command: Command) -> Result<()> {
                 key_len,
                 output,
             } => {
-                let data = std::fs::read(&file)
-                    .with_context(|| format!("reading {}", file.display()))?;
+                let data = std::fs::read(&file)?;
                 write_report(xor_key_recovery(&data, key_len)?, output.output.as_deref())
             }
         },
-
-        // ── NEW: Protocol analysis ───────────────────────────────────────
-        Command::Protocol { capture, output } => {
-            write_report(
-                analyze_protocol_capture(&capture)?,
+        Command::Hardware { command } => match command {
+            HardwareCommand::Discover { output } => {
+                write_report(discover_local_hardware()?, output.output.as_deref())
+            }
+            HardwareCommand::Uart {
+                vcd,
+                channel,
+                baud,
+                output,
+            } => write_report(
+                decode_uart_vcd(&vcd, channel.as_deref(), baud)?,
                 output.output.as_deref(),
-            )
-        }
+            ),
+            HardwareCommand::Spi {
+                vcd,
+                sclk,
+                mosi,
+                miso,
+                cs,
+                cpol,
+                cpha,
+                output,
+            } => write_report(
+                decode_spi_vcd(
+                    &vcd,
+                    sclk.as_deref(),
+                    mosi.as_deref(),
+                    miso.as_deref(),
+                    cs.as_deref(),
+                    cpol,
+                    cpha,
+                )?,
+                output.output.as_deref(),
+            ),
+            HardwareCommand::I2c {
+                vcd,
+                scl,
+                sda,
+                output,
+            } => write_report(
+                decode_i2c_vcd(&vcd, scl.as_deref(), sda.as_deref())?,
+                output.output.as_deref(),
+            ),
+        },
+        Command::Protocol { capture, output } => write_report(
+            analyze_protocol_capture(&capture)?,
+            output.output.as_deref(),
+        ),
+        Command::Ai { command } => match command {
+            AiCommand::Audit {
+                workspace,
+                scope,
+                ledger,
+                sample_rate,
+                html,
+                markdown,
+                output,
+            } => {
+                let rep = autonomous_workspace_audit(
+                    &workspace,
+                    scope.as_deref(),
+                    ledger.as_deref(),
+                    sample_rate,
+                )?;
+                if let Some(hp) = html.as_deref() {
+                    export_html_report(&rep, hp)?;
+                    println!("HTML report written to {}", hp.display());
+                }
+                if let Some(mp) = markdown.as_deref() {
+                    export_markdown_report(&rep, mp)?;
+                    println!("Markdown report written to {}", mp.display());
+                }
+                write_report(rep, output.output.as_deref())
+            }
+            AiCommand::Diagnose {
+                report,
+                question,
+                lang,
+            } => {
+                let rep = read_report(&report)?;
+                write_report(
+                    diagnose_report_offline(&rep, question.as_deref(), &lang),
+                    None,
+                )
+            }
+        },
     }
 }
-
-// ─── Interactive Menu ────────────────────────────────────────────────────────
 
 fn prompt(label: &str) -> Result<String> {
     print!("{label}");
@@ -496,17 +815,17 @@ fn menu() -> Result<()> {
     loop {
         println!(
             "\nIQ Hardware Red-Team Workbench (Authorized Offline Mode)\n\
-             1) IQ capture analysis\n\
-             2) Physical measurement trace\n\
-             3) Create evidence manifest\n\
-             4) Verify evidence manifest\n\
-             5) Hardware/Firmware source review\n\
-             6) Educational qubit simulation\n\
-             7) Ask AI about a report\n\
-             8) Launch Graphical Workbench (GUI)\n\
-             9) Generate demo lab dataset\n\
-             10) Cryptanalysis tools\n\
-             11) Protocol capture analysis\n\
+             1) IQ capture analysis (.csv/.npy/.cf32/.cs16/.cs8/.cu8/.wav/.sigmf-meta)\n\
+             2) Physical measurement trace & TVLA screening\n\
+             3) Create / Verify SHA-256 evidence manifest\n\
+             4) Hardware & Firmware static audit + ELF binary review\n\
+             5) Autonomous Physical AI workspace scan & report\n\
+             6) Cryptanalysis lab (RSA audit, NIST randomness, LLL, LFSR, XOR)\n\
+             7) Hardware discovery & VCD bus decoders (UART / SPI / I2C)\n\
+             8) Protocol capture analysis (.pcap / .csv)\n\
+             9) Quantum multi-qubit / BB84 simulator\n\
+             10) Launch Graphical Workbench (GUI)\n\
+             11) Generate demo lab dataset\n\
              0) Exit"
         );
         let choice = prompt("Choose: ")?;
@@ -514,28 +833,25 @@ fn menu() -> Result<()> {
             return Ok(());
         }
         let result = (|| -> Result<()> {
-            let result = match choice.as_str() {
+            match choice.as_str() {
                 "1" => {
-                    let path = PathBuf::from(prompt("IQ CSV/NPY/CF32/CS8/CU8 path: ")?);
-                    let rate = prompt("Sample rate in Hz (optional): ")?;
-                    let rate = if rate.is_empty() {
-                        None
-                    } else {
-                        Some(rate.parse().context("Sample rate must be a number.")?)
-                    };
+                    let path = PathBuf::from(prompt("IQ capture path: ")?);
+                    let rate = prompt("Sample rate Hz (optional): ")?;
                     dispatch(Command::Analyze {
                         iq_file: path,
-                        sample_rate: rate,
+                        sample_rate: (!rate.is_empty()).then(|| rate.parse().unwrap_or(1.0)),
                         output: OutputArg { output: None },
                     })
                 }
                 "2" => {
-                    let trace = PathBuf::from(prompt("Measurement CSV path: ")?);
-                    let reference = prompt("Reference CSV path (optional): ")?;
+                    let trace = PathBuf::from(prompt("Trace CSV path: ")?);
+                    let matrix = prompt("Is this a multi-trace TVLA matrix? (y/n): ")?;
                     dispatch(Command::Physical {
                         trace,
-                        reference: (!reference.is_empty()).then(|| PathBuf::from(reference)),
+                        reference: None,
                         threshold: 6.0,
+                        matrix: matrix.eq_ignore_ascii_case("y"),
+                        align_window: 0,
                         output: OutputArg { output: None },
                     })
                 }
@@ -548,157 +864,70 @@ fn menu() -> Result<()> {
                         },
                     })
                 }
-                "4" => {
-                    let root = PathBuf::from(prompt("Evidence directory: ")?);
-                    let manifest = PathBuf::from(prompt("Manifest JSON path: ")?);
-                    dispatch(Command::Forensic {
-                        command: ForensicCommand::Verify {
-                            root,
-                            manifest,
+                "4" => dispatch(Command::Audit {
+                    root: PathBuf::from(prompt("Source directory: ")?),
+                    sarif: None,
+                    output: OutputArg { output: None },
+                }),
+                "5" => dispatch(Command::Ai {
+                    command: AiCommand::Audit {
+                        workspace: PathBuf::from(prompt("Workspace directory [./demo_lab]: ")?),
+                        scope: None,
+                        ledger: None,
+                        sample_rate: Some(2_000_000.0),
+                        html: None,
+                        markdown: None,
+                        output: OutputArg { output: None },
+                    },
+                }),
+                "6" => {
+                    let n = prompt("RSA Modulus N (dec or 0x...): ")?;
+                    let e = prompt("Exponent e [65537]: ")?;
+                    dispatch(Command::Crypto {
+                        command: CryptoCommand::RsaAudit {
+                            modulus: n,
+                            exponent: if e.is_empty() { "65537".into() } else { e },
+                            max_steps: 50_000,
                             output: OutputArg { output: None },
                         },
                     })
                 }
-                "5" => dispatch(Command::Audit {
-                    root: PathBuf::from(prompt("Local source directory: ")?),
-                    sarif: None,
+                "7" => dispatch(Command::Hardware {
+                    command: HardwareCommand::Discover {
+                        output: OutputArg { output: None },
+                    },
+                }),
+                "8" => dispatch(Command::Protocol {
+                    capture: PathBuf::from(prompt("PCAP or CSV path: ")?),
                     output: OutputArg { output: None },
                 }),
-                "6" => {
-                    let gates = prompt("Gates, comma-separated (e.g. H,X): ")?;
-                    let theta = prompt("Initial theta in radians [0]: ")?;
-                    let phi = prompt("Initial phi in radians [0]: ")?;
-                    dispatch(Command::Quantum {
-                        gates,
-                        theta: if theta.is_empty() {
-                            0.0
-                        } else {
-                            theta.parse().context("Theta must be a number.")?
-                        },
-                        phi: if phi.is_empty() {
-                            0.0
-                        } else {
-                            phi.parse().context("Phi must be a number.")?
-                        },
-                        output: OutputArg { output: None },
-                    })
-                }
-                "7" => {
-                    let report = PathBuf::from(prompt("Analysis report JSON path: ")?);
-                    dispatch(Command::Chat(ChatArgs {
-                        report,
-                        provider: "gemini".to_owned(),
-                        model: None,
-                        base_url: None,
-                    }))
-                }
-                "8" => dispatch(Command::Gui {
+                "9" => dispatch(Command::Quantum {
+                    gates: prompt("Gates (e.g. H,T or 'H 0,CNOT 0 1'): ")?,
+                    theta: 0.0,
+                    phi: 0.0,
+                    qubits: None,
+                    bb84_photons: None,
+                    eve_ratio: 0.0,
+                    output: OutputArg { output: None },
+                }),
+                "10" => dispatch(Command::Gui {
                     port: 8420,
                     no_open: false,
                 }),
-                "9" => {
-                    let dir = prompt("Demo output directory [./demo_lab]: ")?;
-                    dispatch(Command::Sample {
-                        output_dir: if dir.is_empty() {
-                            PathBuf::from("./demo_lab")
-                        } else {
-                            PathBuf::from(dir)
-                        },
-                    })
-                }
-                "10" => {
-                    println!(
-                        "\nCryptanalysis Tools:\n\
-                         a) RSA factor\n\
-                         b) Frequency analysis\n\
-                         c) Shannon entropy\n\
-                         d) Vigenère crack\n\
-                         e) XOR key recovery"
-                    );
-                    let sub = prompt("Choose (a-e): ")?;
-                    match sub.as_str() {
-                        "a" => {
-                            let n: u64 = prompt("Modulus N: ")?.parse().context("Must be a number")?;
-                            let e: u64 = prompt("Public exponent e [65537]: ")?
-                                .parse()
-                                .unwrap_or(65537);
-                            dispatch(Command::Crypto {
-                                command: CryptoCommand::Rsa {
-                                    modulus: n,
-                                    exponent: e,
-                                    output: OutputArg { output: None },
-                                },
-                            })
-                        }
-                        "b" => {
-                            let file = PathBuf::from(prompt("File path: ")?);
-                            dispatch(Command::Crypto {
-                                command: CryptoCommand::Freq {
-                                    file,
-                                    output: OutputArg { output: None },
-                                },
-                            })
-                        }
-                        "c" => {
-                            let file = PathBuf::from(prompt("File path: ")?);
-                            dispatch(Command::Crypto {
-                                command: CryptoCommand::Entropy {
-                                    file,
-                                    output: OutputArg { output: None },
-                                },
-                            })
-                        }
-                        "d" => {
-                            let file = PathBuf::from(prompt("Ciphertext file (uppercase A-Z): ")?);
-                            dispatch(Command::Crypto {
-                                command: CryptoCommand::Vigenere {
-                                    file,
-                                    max_key_len: 20,
-                                    output: OutputArg { output: None },
-                                },
-                            })
-                        }
-                        "e" => {
-                            let file = PathBuf::from(prompt("Ciphertext file: ")?);
-                            let kl: usize = prompt("Key length: ")?.parse().context("Must be a number")?;
-                            dispatch(Command::Crypto {
-                                command: CryptoCommand::Xor {
-                                    file,
-                                    key_len: kl,
-                                    output: OutputArg { output: None },
-                                },
-                            })
-                        }
-                        _ => {
-                            println!("Invalid choice.");
-                            return Ok(());
-                        }
-                    }
-                }
-                "11" => {
-                    let file = PathBuf::from(prompt("Protocol capture CSV path: ")?);
-                    dispatch(Command::Protocol {
-                        capture: file,
-                        output: OutputArg { output: None },
-                    })
-                }
+                "11" => dispatch(Command::Sample {
+                    output_dir: PathBuf::from("./demo_lab"),
+                }),
                 _ => {
                     println!("Choose one of the listed options.");
-                    return Ok(());
+                    Ok(())
                 }
-            };
-            if let Err(error) = result {
-                eprintln!("error: {error:#}");
             }
-            Ok(())
         })();
         if let Err(error) = result {
             eprintln!("error: {error:#}");
         }
     }
 }
-
-// ─── Entry Point ─────────────────────────────────────────────────────────────
 
 fn run() -> Result<()> {
     if std::env::args_os().len() == 1 {

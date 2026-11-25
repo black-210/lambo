@@ -1,12 +1,22 @@
+use crate::ai::{autonomous_workspace_audit, diagnose_report_offline};
 use crate::assess::{
     AssessmentInput, assess_engagement, export_html_report, export_markdown_report,
     export_sarif_report, generate_demo_workspace,
 };
 use crate::audit::scan_source_tree;
+use crate::cryptanalysis::{
+    berlekamp_massey_gf2, detect_ecb_blocks, lll_reduce, nist_randomness_suite, rsa_audit,
+    rsa_batch_gcd, xor_key_recovery,
+};
 use crate::evidence::{create_manifest, verify_manifest};
+use crate::firmware::inspect_firmware_binary;
+use crate::hardware::{
+    decode_i2c_vcd, decode_spi_vcd, decode_uart_vcd, discover_local_hardware,
+};
 use crate::legal::verify_audit_ledger;
-use crate::physical::analyze_trace;
-use crate::quantum::simulate_qubit;
+use crate::physical::{analyze_trace, analyze_trace_matrix};
+use crate::protocol::analyze_protocol_capture;
+use crate::quantum::{simulate_bb84, simulate_circuit, simulate_qubit};
 use crate::signal::analyze_iq;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -86,13 +96,111 @@ pub fn handle_api(path: &str, body: Value) -> Result<Value> {
         }
         "/api/analyze-physical" => {
             let trace = req_path(&body, "trace")?;
-            let reference = opt_path(&body, "reference");
-            let threshold = body["threshold"].as_f64().unwrap_or(6.0);
-            analyze_trace(&trace, reference.as_deref(), threshold)
+            if body["matrix"].as_bool().unwrap_or(false) {
+                let align = body["align_window"].as_u64().unwrap_or(0) as usize;
+                analyze_trace_matrix(&trace, align)
+            } else {
+                let reference = opt_path(&body, "reference");
+                let threshold = body["threshold"].as_f64().unwrap_or(6.0);
+                analyze_trace(&trace, reference.as_deref(), threshold)
+            }
         }
         "/api/audit" => {
             let root = req_path(&body, "root")?;
             scan_source_tree(&root)
+        }
+        "/api/firmware" => {
+            let fw = req_path(&body, "firmware")?;
+            inspect_firmware_binary(&fw)
+        }
+        "/api/protocol" => {
+            let capture = req_path(&body, "capture")?;
+            analyze_protocol_capture(&capture)
+        }
+        "/api/hardware/discover" => discover_local_hardware(),
+        "/api/hardware/decode" => {
+            let vcd = req_path(&body, "vcd")?;
+            let bus = body["bus"].as_str().unwrap_or("uart");
+            match bus {
+                "uart" => decode_uart_vcd(
+                    &vcd,
+                    body["channel"].as_str().filter(|s| !s.is_empty()),
+                    body["baud"].as_f64(),
+                ),
+                "spi" => decode_spi_vcd(&vcd, None, None, None, None, 0, 0),
+                "i2c" => decode_i2c_vcd(&vcd, None, None),
+                other => bail!("Unsupported bus decoder {other:?}"),
+            }
+        }
+        "/api/crypto" => {
+            let op = body["op"].as_str().unwrap_or("rsa");
+            match op {
+                "rsa" => {
+                    let n = body["modulus"].as_str().context("Missing 'modulus'")?;
+                    let e = body["exponent"].as_str().unwrap_or("65537");
+                    rsa_audit(e, n, 50_000)
+                }
+                "batch_gcd" => {
+                    let mods: Vec<String> = body["moduli"]
+                        .as_str()
+                        .unwrap_or("")
+                        .split([',', '\n', ' '])
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned)
+                        .collect();
+                    rsa_batch_gcd(&mods)
+                }
+                "nist" => {
+                    if let Some(p) = opt_path(&body, "file") {
+                        let bytes = fs::read(&p)?;
+                        nist_randomness_suite(&bytes)
+                    } else {
+                        let hex_str = body["data_hex"].as_str().unwrap_or("");
+                        let bytes = hex::decode(hex_str.trim())
+                            .context("Invalid hex bytes for NIST test")?;
+                        nist_randomness_suite(&bytes)
+                    }
+                }
+                "lfsr" => {
+                    let hex_str = body["data_hex"].as_str().unwrap_or("");
+                    let bytes = if let Some(p) = opt_path(&body, "file") {
+                        fs::read(&p)?
+                    } else {
+                        hex::decode(hex_str.trim()).unwrap_or_else(|_| hex_str.as_bytes().to_vec())
+                    };
+                    berlekamp_massey_gf2(&bytes)
+                }
+                "lll" => {
+                    let basis: Vec<Vec<f64>> = serde_json::from_str(
+                        body["basis_json"].as_str().unwrap_or("[[1,127],[0,3233]]"),
+                    )?;
+                    lll_reduce(&basis, 0.99)
+                }
+                "ecb" => {
+                    let p = req_path(&body, "file")?;
+                    detect_ecb_blocks(&fs::read(&p)?, 16)
+                }
+                "xor" => {
+                    let p = req_path(&body, "file")?;
+                    let kl = body["key_len"].as_u64().unwrap_or(0) as usize;
+                    xor_key_recovery(&fs::read(&p)?, kl)
+                }
+                other => bail!("Unsupported crypto operation {other:?}"),
+            }
+        }
+        "/api/ai/audit" => {
+            let ws = req_path(&body, "workspace")?;
+            let scope = opt_path(&body, "scope_file");
+            let ledger = opt_path(&body, "ledger_file");
+            let rate = body["sample_rate_hz"].as_f64();
+            autonomous_workspace_audit(&ws, scope.as_deref(), ledger.as_deref(), rate)
+        }
+        "/api/ai/diagnose" => {
+            let report = body.get("report").context("Missing 'report' JSON object.")?;
+            let q = body["question"].as_str();
+            let lang = body["lang"].as_str().unwrap_or("ar");
+            Ok(diagnose_report_offline(report, q, lang))
         }
         "/api/assess" => {
             let input = AssessmentInput {
@@ -109,25 +217,19 @@ pub fn handle_api(path: &str, body: Value) -> Result<Value> {
         }
         "/api/export-html" => {
             let out = req_path(&body, "output_path")?;
-            let report = body
-                .get("report")
-                .context("Missing 'report' JSON object.")?;
+            let report = body.get("report").context("Missing 'report' JSON object.")?;
             export_html_report(report, &out)?;
             Ok(json!({ "exported": true, "output_path": out.to_string_lossy() }))
         }
         "/api/export-markdown" => {
             let out = req_path(&body, "output_path")?;
-            let report = body
-                .get("report")
-                .context("Missing 'report' JSON object.")?;
+            let report = body.get("report").context("Missing 'report' JSON object.")?;
             export_markdown_report(report, &out)?;
             Ok(json!({ "exported": true, "output_path": out.to_string_lossy() }))
         }
         "/api/export-sarif" => {
             let out = req_path(&body, "output_path")?;
-            let report = body
-                .get("report")
-                .context("Missing 'report' JSON object.")?;
+            let report = body.get("report").context("Missing 'report' JSON object.")?;
             export_sarif_report(report, &out)?;
             Ok(json!({ "exported": true, "output_path": out.to_string_lossy() }))
         }
@@ -157,16 +259,31 @@ pub fn handle_api(path: &str, body: Value) -> Result<Value> {
             verify_audit_ledger(&ledger)
         }
         "/api/quantum" => {
-            let gates_raw = body["gates"].as_str().unwrap_or("");
-            let gates: Vec<String> = gates_raw
-                .split(',')
-                .map(str::trim)
-                .filter(|g| !g.is_empty())
-                .map(str::to_owned)
-                .collect();
-            let theta = body["theta"].as_f64().unwrap_or(0.0);
-            let phi = body["phi"].as_f64().unwrap_or(0.0);
-            simulate_qubit(&gates, theta, phi)
+            if let Some(photons) = body["bb84_photons"].as_u64() {
+                let eve = body["eve_ratio"].as_f64().unwrap_or(0.0);
+                simulate_bb84(photons as usize, eve)
+            } else if let Some(nq) = body["qubits"].as_u64() {
+                let ops: Vec<String> = body["gates"]
+                    .as_str()
+                    .unwrap_or("")
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|g| !g.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                simulate_circuit(nq as usize, &ops)
+            } else {
+                let gates_raw = body["gates"].as_str().unwrap_or("");
+                let gates: Vec<String> = gates_raw
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|g| !g.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                let theta = body["theta"].as_f64().unwrap_or(0.0);
+                let phi = body["phi"].as_f64().unwrap_or(0.0);
+                simulate_qubit(&gates, theta, phi)
+            }
         }
         _ => bail!("Unknown API endpoint: {path}"),
     }
@@ -302,5 +419,13 @@ mod tests {
         let out = handle_api("/api/quantum", json!({"gates": "H", "theta": 0.0, "phi": 0.0})).unwrap();
         assert!((out["probabilities"]["0"].as_f64().unwrap() - 0.5).abs() < 1e-12);
         assert!(std::path::Path::new("src/assets/workbench.html").exists());
+    }
+
+    #[test]
+    fn crypto_api_and_ai_diagnose_work() {
+        let rsa = handle_api("/api/crypto", json!({"op": "rsa", "modulus": "3233", "exponent": "17"})).unwrap();
+        assert_eq!(rsa["vulnerable"], true);
+        let diag = handle_api("/api/ai/diagnose", json!({"report": rsa, "lang": "ar"})).unwrap();
+        assert_eq!(diag["mode"], "offline_deterministic_physical_ai");
     }
 }

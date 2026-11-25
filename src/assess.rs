@@ -333,8 +333,56 @@ pub fn generate_demo_workspace(output_dir: &Path) -> Result<Value> {
         "void log_msg(char *dst, const char *src) {\n    strcpy(dst, src);\n}\n",
     )?;
 
+    // Also emit sample UART VCD, Protocol CSV, and Side-Channel Matrix CSV for full-stack demos
+    let uart_vcd = output_dir.join("uart_demo.vcd");
+    let mut vcd = String::from("$timescale 1us $end\n$var wire 1 ! UART_TX $end\n$enddefinitions $end\n$dumpvars\n1!\n$end\n");
+    let mut t = 1000u64;
+    for &ch in b"U-Boot root=admin\n" {
+        vcd.push_str(&format!("#{t}\n0!\n"));
+        t += 1000;
+        let mut prev = 0u8;
+        for b_idx in 0..8 {
+            let bit = (ch >> b_idx) & 1;
+            if bit != prev {
+                vcd.push_str(&format!("#{t}\n{bit}!\n"));
+                prev = bit;
+            }
+            t += 1000;
+        }
+        if prev != 1 {
+            vcd.push_str(&format!("#{t}\n1!\n"));
+        }
+        t += 2000;
+    }
+    fs::write(&uart_vcd, vcd)?;
+
+    let proto_csv = output_dir.join("protocol_demo.csv");
+    fs::write(
+        &proto_csv,
+        "timestamp,src_ip,dst_ip,protocol,src_port,dst_port,length,payload_hex\n\
+         0.0,192.168.1.50,10.0.0.10,TCP,41234,1883,120,70617373776f72643d64656d6f\n\
+         1.0,192.168.1.50,10.0.0.10,TCP,41234,1883,120,6f6b\n\
+         2.0,192.168.1.50,10.0.0.10,TCP,41234,1883,120,6f6b\n\
+         3.0,192.168.1.50,10.0.0.10,TCP,41234,1883,120,6f6b\n\
+         4.0,192.168.1.50,10.0.0.10,TCP,41234,1883,120,6f6b\n",
+    )?;
+
+    let tvla_csv = output_dir.join("tvla_matrix_demo.csv");
+    let mut tvla = String::from("label,s0,s1,s2,s3,s4,s5\n");
+    for idx in 0..24 {
+        let cls = idx % 2;
+        let base = 0.05 * ((idx as f64) * 0.3).sin();
+        let leak = if cls == 1 { 3.5 } else { 0.0 };
+        tvla.push_str(&format!(
+            "{cls},{base:.4},{base:.4},{:.4},{:.4},{base:.4},{base:.4}\n",
+            base + leak,
+            base + leak * 0.6
+        ));
+    }
+    fs::write(&tvla_csv, tvla)?;
+
     Ok(json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "analysis": "synthetic_lab_demo_generated",
         "output_dir": output_dir.to_string_lossy(),
         "files": {
@@ -342,7 +390,10 @@ pub fn generate_demo_workspace(output_dir: &Path) -> Result<Value> {
             "iq_capture": iq_path.to_string_lossy(),
             "physical_trace": trace_path.to_string_lossy(),
             "physical_reference": ref_path.to_string_lossy(),
-            "firmware_dir": fw_dir.to_string_lossy()
+            "firmware_dir": fw_dir.to_string_lossy(),
+            "uart_vcd": uart_vcd.to_string_lossy(),
+            "protocol_csv": proto_csv.to_string_lossy(),
+            "tvla_matrix_csv": tvla_csv.to_string_lossy()
         }
     }))
 }

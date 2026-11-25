@@ -1,5 +1,6 @@
 use iq_research_workbench::gui::handle_connection;
 use iq_research_workbench::prelude::*;
+use num_complex::Complex64;
 use std::f64::consts::PI;
 use std::fs;
 use std::io::{Read, Write};
@@ -51,6 +52,52 @@ fn workbench_supports_raw_sdr_cf32_and_cu8_formats() {
     fs::write(&cu8_path, cu8_bytes).unwrap();
     let cu8_rep = Workbench::new().sample_rate(128.0).analyze_iq_file(&cu8_path).unwrap();
     assert_eq!(cu8_rep["spectral_peaks"][0]["frequency"], 6.0);
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn library_facade_and_autonomous_ai_pipeline_end_to_end() {
+    let dir = temp_dir("full-ai");
+    let demo = generate_demo_workspace(&dir).unwrap();
+
+    let wb = Workbench::new()
+        .sample_rate(2_000_000.0)
+        .with_scope(demo["files"]["scope"].as_str().unwrap())
+        .with_ledger(dir.join("ledger.jsonl"));
+
+    // Hardware capture trait streaming
+    let iq_stream: Vec<Complex64> = (0..128)
+        .map(|i| {
+            let ang = 2.0 * PI * 10.0 * i as f64 / 128.0;
+            Complex64::new(ang.cos(), ang.sin())
+        })
+        .collect();
+    let mut hw = MemoryHardwareSource::new("BenchSDR", 128.0).with_iq(iq_stream);
+    let hw_rep = wb.analyze_hardware_iq(&mut hw, 128).unwrap();
+    assert_eq!(hw_rep["spectral_peaks"][0]["frequency"], 10.0);
+
+    // UART VCD decoding from demo workspace
+    let uart = wb
+        .decode_uart(std::path::Path::new(demo["files"]["uart_vcd"].as_str().unwrap()), None, Some(1000.0))
+        .unwrap();
+    assert!(uart["decoded_ascii"].as_str().unwrap().contains("U-Boot"));
+
+    // Side-channel TVLA matrix from demo workspace
+    let tvla = wb
+        .analyze_side_channel_matrix(
+            std::path::Path::new(demo["files"]["tvla_matrix_csv"].as_str().unwrap()),
+            0,
+        )
+        .unwrap();
+    assert_eq!(tvla["tvla_leakage_detected"], true);
+
+    // Autonomous AI workspace audit & offline bilingual diagnosis
+    let ai_rep = wb.ai_autonomous_audit(&dir).unwrap();
+    assert_eq!(ai_rep["legal_authorized"], true);
+    assert!(ai_rep["summary"]["hypothesis_count"].as_u64().unwrap() >= 2);
+    let diag = wb.ai_diagnose(&ai_rep, Some("ما هي التوصيات؟"), "ar");
+    assert_eq!(diag["mode"], "offline_deterministic_physical_ai");
 
     fs::remove_dir_all(dir).unwrap();
 }

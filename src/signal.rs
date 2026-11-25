@@ -12,6 +12,12 @@ use std::path::Path;
 const MAX_INPUT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_SAMPLES: usize = 2_000_000;
 
+struct LoadedIq {
+    samples: Vec<Complex64>,
+    inferred_sample_rate: Option<f64>,
+    format_name: String,
+}
+
 fn parse_csv(path: &Path) -> Result<Vec<Complex64>> {
     let file = File::open(path).with_context(|| format!("Opening {}", path.display()))?;
     let mut reader = csv::ReaderBuilder::new()
@@ -67,6 +73,23 @@ fn parse_raw_cf32(path: &Path) -> Result<Vec<Complex64>> {
         .collect())
 }
 
+fn parse_raw_cs16(path: &Path) -> Result<Vec<Complex64>> {
+    let bytes = std::fs::read(path).with_context(|| format!("Reading {}", path.display()))?;
+    let (chunks, remainder) = bytes.as_chunks::<4>();
+    if !remainder.is_empty() {
+        bail!("Raw cs16 IQ file length must be a multiple of 4 bytes (I,Q int16 pairs).");
+    }
+    Ok(chunks
+        .iter()
+        .take(MAX_SAMPLES)
+        .map(|chunk| {
+            let i = i16::from_le_bytes([chunk[0], chunk[1]]) as f64 / 32768.0;
+            let q = i16::from_le_bytes([chunk[2], chunk[3]]) as f64 / 32768.0;
+            Complex64::new(i, q)
+        })
+        .collect())
+}
+
 fn parse_raw_cs8(path: &Path) -> Result<Vec<Complex64>> {
     let bytes = std::fs::read(path).with_context(|| format!("Reading {}", path.display()))?;
     let (pairs, remainder) = bytes.as_chunks::<2>();
@@ -76,7 +99,12 @@ fn parse_raw_cs8(path: &Path) -> Result<Vec<Complex64>> {
     Ok(pairs
         .iter()
         .take(MAX_SAMPLES)
-        .map(|pair| Complex64::new((pair[0] as i8) as f64 / 128.0, (pair[1] as i8) as f64 / 128.0))
+        .map(|pair| {
+            Complex64::new(
+                (pair[0] as i8) as f64 / 128.0,
+                (pair[1] as i8) as f64 / 128.0,
+            )
+        })
         .collect())
 }
 
@@ -98,13 +126,118 @@ fn parse_raw_cu8(path: &Path) -> Result<Vec<Complex64>> {
         .collect())
 }
 
+/// From-scratch RIFF/WAVE stereo I/Q parser supporting 8-bit uint, 16-bit int, and 32-bit float PCM.
+fn parse_wav_iq(path: &Path) -> Result<(Vec<Complex64>, Option<f64>)> {
+    let bytes = std::fs::read(path).with_context(|| format!("Reading {}", path.display()))?;
+    if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        bail!("Invalid RIFF/WAVE IQ header.");
+    }
+    let mut offset = 12usize;
+    let mut audio_format = 0u16;
+    let mut channels = 0u16;
+    let mut sample_rate = 0u32;
+    let mut bits_per_sample = 0u16;
+    let mut data_slice: Option<&[u8]> = None;
+
+    while offset + 8 <= bytes.len() {
+        let id = &bytes[offset..offset + 4];
+        let size = u32::from_le_bytes([
+            bytes[offset + 4],
+            bytes[offset + 5],
+            bytes[offset + 6],
+            bytes[offset + 7],
+        ]) as usize;
+        let payload_start = offset + 8;
+        let payload_end = payload_start.saturating_add(size).min(bytes.len());
+        if id == b"fmt " && payload_end - payload_start >= 16 {
+            let f = &bytes[payload_start..payload_end];
+            audio_format = u16::from_le_bytes([f[0], f[1]]);
+            channels = u16::from_le_bytes([f[2], f[3]]);
+            sample_rate = u32::from_le_bytes([f[4], f[5], f[6], f[7]]);
+            bits_per_sample = u16::from_le_bytes([f[14], f[15]]);
+        } else if id == b"data" {
+            data_slice = Some(&bytes[payload_start..payload_end]);
+            break;
+        }
+        offset = payload_start + size + (size & 1);
+    }
+
+    if channels != 2 {
+        bail!("WAV IQ file must contain 2 channels (I, Q), found {channels}.");
+    }
+    let raw = data_slice.context("WAV file has no data chunk.")?;
+    let samples = match (audio_format, bits_per_sample) {
+        (1, 8) => raw
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .take(MAX_SAMPLES)
+            .map(|p| {
+                Complex64::new(
+                    (p[0] as f64 - 127.5) / 127.5,
+                    (p[1] as f64 - 127.5) / 127.5,
+                )
+            })
+            .collect(),
+        (1, 16) => raw
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .take(MAX_SAMPLES)
+            .map(|c| {
+                Complex64::new(
+                    i16::from_le_bytes([c[0], c[1]]) as f64 / 32768.0,
+                    i16::from_le_bytes([c[2], c[3]]) as f64 / 32768.0,
+                )
+            })
+            .collect(),
+        (3, 32) => raw
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .take(MAX_SAMPLES)
+            .map(|c| {
+                Complex64::new(
+                    f32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64,
+                    f32::from_le_bytes([c[4], c[5], c[6], c[7]]) as f64,
+                )
+            })
+            .collect(),
+        _ => bail!(
+            "Unsupported WAV format={audio_format}, bits={bits_per_sample} (supported: PCM 8/16, Float32)."
+        ),
+    };
+    let rate = (sample_rate > 0).then_some(sample_rate as f64);
+    Ok((samples, rate))
+}
+
+/// SigMF archive reader (`.sigmf-meta` + companion `.sigmf-data`).
+fn parse_sigmf(meta_path: &Path) -> Result<(Vec<Complex64>, Option<f64>, String)> {
+    let meta_bytes = std::fs::read(meta_path)
+        .with_context(|| format!("Reading SigMF metadata {}", meta_path.display()))?;
+    let meta: Value = serde_json::from_slice(&meta_bytes).context("Parsing SigMF JSON")?;
+    let global = &meta["global"];
+    let datatype = global["core:datatype"].as_str().unwrap_or("cf32_le");
+    let sample_rate = global["core:sample_rate"].as_f64();
+
+    let data_path = meta_path.with_extension("sigmf-data");
+    if !data_path.is_file() {
+        bail!("Companion SigMF data file not found: {}", data_path.display());
+    }
+    let samples = match datatype {
+        "cf32_le" => parse_raw_cf32(&data_path)?,
+        "ci16_le" => parse_raw_cs16(&data_path)?,
+        "ci8" => parse_raw_cs8(&data_path)?,
+        "cu8" => parse_raw_cu8(&data_path)?,
+        other => bail!("Unsupported SigMF core:datatype {other:?}"),
+    };
+    Ok((samples, sample_rate, format!("sigmf({datatype})")))
+}
+
 fn real_array_to_iq(data: ArrayD<f64>) -> Result<Vec<Complex64>> {
     let shape = data.shape();
     match shape {
-        [_] => Ok(data
-            .iter()
-            .map(|value| Complex64::new(*value, 0.0))
-            .collect()),
+        [_] => Ok(data.iter().map(|value| Complex64::new(*value, 0.0)).collect()),
         [_, 2] => {
             let (pairs, _) = data
                 .as_slice()
@@ -149,7 +282,7 @@ fn parse_npy(path: &Path) -> Result<Vec<Complex64>> {
     bail!("Could not read supported NPY data; use numeric 1D complex or 2D real I,Q arrays.")
 }
 
-fn load_iq(path: &Path) -> Result<Vec<Complex64>> {
+fn load_iq(path: &Path) -> Result<LoadedIq> {
     let metadata = path
         .metadata()
         .with_context(|| format!("Reading input metadata for {}", path.display()))?;
@@ -160,34 +293,60 @@ fn load_iq(path: &Path) -> Result<Vec<Complex64>> {
         bail!("Input exceeds the 256 MiB size limit.");
     }
 
+    let name_lower = path
+        .file_name()
+        .and_then(|v| v.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
     let ext = path
         .extension()
         .and_then(|value| value.to_str())
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
-    let samples = match ext.as_str() {
-        "csv" => parse_csv(path)?,
-        "npy" => parse_npy(path)?,
-        "cf32" | "fc32" => parse_raw_cf32(path)?,
-        "cs8" | "sc8" => parse_raw_cs8(path)?,
-        "cu8" | "uc8" => parse_raw_cu8(path)?,
-        _ => bail!("Supported IQ formats are .csv, .npy, .cf32, .cs8, and .cu8."),
+
+    let (samples, inferred_sample_rate, format_name) = if name_lower.ends_with(".sigmf-meta") {
+        parse_sigmf(path)?
+    } else {
+        match ext.as_str() {
+            "csv" => (parse_csv(path)?, None, "csv".to_owned()),
+            "npy" => (parse_npy(path)?, None, "npy".to_owned()),
+            "cf32" | "fc32" => (parse_raw_cf32(path)?, None, "cf32".to_owned()),
+            "cs16" | "sc16" | "ci16" => (parse_raw_cs16(path)?, None, "cs16".to_owned()),
+            "cs8" | "sc8" | "ci8" => (parse_raw_cs8(path)?, None, "cs8".to_owned()),
+            "cu8" | "uc8" => (parse_raw_cu8(path)?, None, "cu8".to_owned()),
+            "wav" => {
+                let (s, rate) = parse_wav_iq(path)?;
+                (s, rate, "wav_iq".to_owned())
+            }
+            _ => bail!(
+                "Supported IQ formats are .csv, .npy, .cf32, .cs16, .cs8, .cu8, .wav, and .sigmf-meta."
+            ),
+        }
     };
+
     if samples.len() < 2 {
         bail!("IQ input must contain at least two samples.");
     }
     if samples.len() > MAX_SAMPLES {
         bail!("Input exceeds the {MAX_SAMPLES} sample limit.");
     }
-    if samples.iter().any(|sample| {
-        !sample.re.is_finite() || !sample.im.is_finite() || !sample.norm().is_finite()
-    }) {
+    if samples
+        .iter()
+        .any(|sample| !sample.re.is_finite() || !sample.im.is_finite() || !sample.norm().is_finite())
+    {
         bail!("IQ input contains non-finite values or magnitudes outside the supported range.");
     }
-    Ok(samples)
+    Ok(LoadedIq {
+        samples,
+        inferred_sample_rate,
+        format_name,
+    })
 }
 
-fn compute_iq_impairments(normalized: &[Complex64], mean: Complex64) -> (f64, f64, f64, f64) {
+fn compute_iq_impairments(
+    normalized: &[Complex64],
+    mean: Complex64,
+) -> (f64, f64, f64, f64, f64) {
     let count = normalized.len() as f64;
     let mut sum_i2 = 0.0;
     let mut sum_q2 = 0.0;
@@ -213,16 +372,115 @@ fn compute_iq_impairments(normalized: &[Complex64], mean: Complex64) -> (f64, f6
     } else {
         0.0
     };
-    (i_rms_norm, q_rms_norm, gain_imbalance_db, phase_skew_deg)
+
+    // Analytical Image Rejection Ratio (IRR) from IQ amplitude ratio g and phase mismatch phi
+    let g = if i_rms_norm > 1e-12 && q_rms_norm > 1e-12 {
+        q_rms_norm / i_rms_norm
+    } else {
+        1.0
+    };
+    let phi = phase_skew_deg.to_radians();
+    let num = 1.0 + 2.0 * g * phi.cos() + g * g;
+    let den = (1.0 - 2.0 * g * phi.cos() + g * g).max(1e-12);
+    let irr_db = 10.0 * (num / den).log10();
+
+    (
+        i_rms_norm,
+        q_rms_norm,
+        gain_imbalance_db,
+        phase_skew_deg,
+        irr_db,
+    )
 }
 
-fn envelope_and_phase_profile(normalized: &[Complex64]) -> (f64, f64, &'static str) {
+/// Higher-order statistical cumulants (C20, C40, C42) & modulation classification from scratch.
+fn higher_order_cumulants_amc(
+    normalized: &[Complex64],
+    mean: Complex64,
+    phase_diff_rms: f64,
+    cv: f64,
+) -> (f64, f64, &'static str) {
+    let centered: Vec<Complex64> = normalized.iter().map(|s| *s - mean).collect();
+    let p_avg = centered.iter().map(|s| s.norm_sqr()).sum::<f64>() / centered.len() as f64;
+    if p_avg <= 1e-15 {
+        return (0.0, 0.0, "low-energy-or-dc-only");
+    }
+    let scale = p_avg.sqrt();
+    let unit: Vec<Complex64> = centered.iter().map(|s| *s / scale).collect();
+    let n = unit.len() as f64;
+
+    let c20 = unit.iter().map(|z| z * z).sum::<Complex64>() / n;
+    let c21 = 1.0_f64;
+    let m40 = unit.iter().map(|z| z * z * z * z).sum::<Complex64>() / n;
+    let m42 = unit
+        .iter()
+        .map(|z| z.norm_sqr() * z.norm_sqr())
+        .sum::<f64>()
+        / n;
+    let c40 = (m40 - Complex64::new(3.0, 0.0) * c20 * c20).norm();
+    let c42 = m42 - c20.norm_sqr() - 2.0 * c21 * c21;
+
+    let mod_guess = if cv < 0.12 && phase_diff_rms < 0.25 {
+        "CW / Unmodulated Carrier"
+    } else if c20.norm() > 0.65 && c40 > 1.2 {
+        "BPSK / ASK-like (Real Constellation)"
+    } else if cv < 0.22 && c42 < -0.75 {
+        "Constant-Envelope PSK / FSK / FM"
+    } else if c42.abs() < 0.35 {
+        "Gaussian / OFDM / Spread-Spectrum"
+    } else {
+        "Multi-Level QAM / Mixed Signal"
+    };
+
+    (c40, c42, mod_guess)
+}
+
+/// Cyclostationary / nonlinear envelope symbol-rate peak estimator.
+fn estimate_symbol_rate(normalized: &[Complex64], mean: Complex64, sample_rate: Option<f64>) -> Option<f64> {
+    let n = normalized.len();
+    if n < 32 {
+        return None;
+    }
+    let env_sq: Vec<f64> = normalized.iter().map(|s| (*s - mean).norm_sqr()).collect();
+    let avg = env_sq.iter().sum::<f64>() / n as f64;
+    let mut buf: Vec<Complex64> = env_sq
+        .iter()
+        .map(|&v| Complex64::new(v - avg, 0.0))
+        .collect();
+    let mut planner = FftPlanner::<f64>::new();
+    planner.plan_fft_forward(n).process(&mut buf);
+    let half = n / 2;
+    let (idx, _peak) = buf[1..=half]
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (i + 1, c.norm_sqr()))
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .unwrap_or((0, 0.0));
+    if idx == 0 {
+        return None;
+    }
+    let mags: Vec<f64> = buf[1..=half].iter().map(|c| c.norm_sqr()).collect();
+    let med = median(&mags);
+    if mags[idx - 1] <= med * 10.0 {
+        return None;
+    }
+    Some(match sample_rate {
+        Some(rate) => idx as f64 * rate / n as f64,
+        None => idx as f64 / n as f64,
+    })
+}
+
+fn envelope_and_phase_profile(normalized: &[Complex64]) -> (f64, f64, f64, &'static str) {
     let mags: Vec<f64> = normalized.iter().map(|s| s.norm()).collect();
     let mean_m = mags.iter().sum::<f64>() / mags.len() as f64;
     let var_m = mags.iter().map(|m| (m - mean_m).powi(2)).sum::<f64>() / mags.len() as f64;
     let std_m = var_m.sqrt();
     let env_kurtosis = if std_m > 1e-12 {
-        mags.iter().map(|m| ((m - mean_m) / std_m).powi(4)).sum::<f64>() / mags.len() as f64 - 3.0
+        mags.iter()
+            .map(|m| ((m - mean_m) / std_m).powi(4))
+            .sum::<f64>()
+            / mags.len() as f64
+            - 3.0
     } else {
         0.0
     };
@@ -252,11 +510,14 @@ fn envelope_and_phase_profile(normalized: &[Complex64]) -> (f64, f64, &'static s
     } else {
         "multilevel-qam-ofdm-or-noise-like"
     };
-    (env_kurtosis, phase_diff_rms, character)
+    (env_kurtosis, phase_diff_rms, cv, character)
 }
 
-/// Welch overlapped averaged PSD (50% overlap, Hann window) for variance-reduced noise floor & spur clarity.
-fn welch_psd(normalized: &[Complex64], mean: Complex64, sample_rate: Option<f64>) -> (Vec<f64>, Vec<f64>, usize) {
+fn welch_psd(
+    normalized: &[Complex64],
+    mean: Complex64,
+    sample_rate: Option<f64>,
+) -> (Vec<f64>, Vec<f64>, usize) {
     let n = normalized.len();
     let seg_len = if n >= 256 {
         (n / 4).clamp(64, 4096)
@@ -319,7 +580,6 @@ fn welch_psd(normalized: &[Complex64], mean: Complex64, sample_rate: Option<f64>
     (power, freqs, segments.max(1))
 }
 
-/// CA-CFAR adaptive spur/emitter detector comparing each bin to surrounding training cells.
 fn cfar_detect_spurs(power: &[f64], freqs: &[f64], unit: &str) -> Vec<Value> {
     let n = power.len();
     if n < 24 {
@@ -386,7 +646,11 @@ fn detect_bursts(normalized: &[Complex64]) -> (usize, Vec<Value>) {
     }
     let energies: Vec<f64> = window_rms.iter().map(|w| w.2).collect();
     let baseline = median(&energies);
-    let threshold = if baseline > 1e-9 { baseline * 2.5 } else { 1e-6 };
+    let threshold = if baseline > 1e-9 {
+        baseline * 2.5
+    } else {
+        1e-6
+    };
 
     let mut bursts = Vec::new();
     let mut active: Option<(usize, usize, f64)> = None;
@@ -572,12 +836,19 @@ pub fn analyze_samples(samples: &[Complex64], sample_rate: Option<f64>) -> Resul
     let dc_offset_magnitude = mean_i.hypot(mean_q);
     let rms = rms_normalized * scale;
     let peak = peak_normalized * scale;
-    let dc_offset_ratio = if rms > 0.0 { dc_offset_magnitude / rms } else { 0.0 };
+    let dc_offset_ratio = if rms > 0.0 {
+        dc_offset_magnitude / rms
+    } else {
+        0.0
+    };
 
-    let (i_rms_norm, q_rms_norm, iq_gain_imbalance_db, iq_phase_skew_deg) =
+    let (i_rms_norm, q_rms_norm, iq_gain_imbalance_db, iq_phase_skew_deg, iq_image_rejection_db) =
         compute_iq_impairments(&normalized, mean);
-    let (envelope_kurtosis, phase_diff_rms_rad, signal_character) =
+    let (envelope_kurtosis, phase_diff_rms_rad, cv, signal_character) =
         envelope_and_phase_profile(&normalized);
+    let (cumulant_c40, cumulant_c42, modulation_guess) =
+        higher_order_cumulants_amc(&normalized, mean, phase_diff_rms_rad, cv);
+    let est_symbol_rate = estimate_symbol_rate(&normalized, mean, sample_rate);
 
     let len = normalized.len();
     let mut spectrum: Vec<Complex64> = normalized
@@ -710,7 +981,7 @@ pub fn analyze_samples(samples: &[Complex64], sample_rate: Option<f64>) -> Resul
         vec!["No non-zero spectral component was measured after mean removal.".to_owned()]
     };
     observations.push(format!(
-        "Signal character indicator: {signal_character}; CA-CFAR adaptive spurs detected: {}.",
+        "Signal character: {signal_character}; AMC guess: {modulation_guess} (IRR {iq_image_rejection_db:.1} dB); CA-CFAR spurs: {}.",
         cfar_spurs.len()
     ));
     if !anomaly_flags.is_empty() {
@@ -722,7 +993,7 @@ pub fn analyze_samples(samples: &[Complex64], sample_rate: Option<f64>) -> Resul
     }
 
     Ok(json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "analysis": "offline_iq_spectral_baseline",
         "input": {
             "sample_count": samples.len(),
@@ -740,6 +1011,7 @@ pub fn analyze_samples(samples: &[Complex64], sample_rate: Option<f64>) -> Resul
             "q_rms": q_rms_norm * scale,
             "iq_gain_imbalance_db": iq_gain_imbalance_db,
             "iq_phase_skew_deg": iq_phase_skew_deg,
+            "iq_image_rejection_db": iq_image_rejection_db,
             "estimated_snr_db": estimated_snr_db,
             "sfdr_db": sfdr_db,
             "spectral_flatness": flatness,
@@ -749,6 +1021,10 @@ pub fn analyze_samples(samples: &[Complex64], sample_rate: Option<f64>) -> Resul
             "cfar_spur_count": cfar_spurs.len(),
             "envelope_kurtosis": envelope_kurtosis,
             "phase_diff_rms_rad": phase_diff_rms_rad,
+            "cumulant_c40_abs": cumulant_c40,
+            "cumulant_c42": cumulant_c42,
+            "modulation_classification": modulation_guess,
+            "estimated_symbol_rate": est_symbol_rate,
             "signal_character": signal_character,
             "burst_count": burst_count,
             "anomaly_score": anomaly_score
@@ -761,16 +1037,17 @@ pub fn analyze_samples(samples: &[Complex64], sample_rate: Option<f64>) -> Resul
         "observations": observations,
         "limitations": [
             "These are offline signal measurements and RF impairment indicators, not proof of exploitability.",
-            "Record instrument calibration, shielding, and authorization before drawing hardware conclusions.",
-            "IQ samples alone cannot establish a quantum-mechanical property or security impact."
+            "Record instrument calibration, shielding, and authorization before drawing hardware conclusions."
         ]
     }))
 }
 
 pub fn analyze_iq(path: &Path, sample_rate: Option<f64>) -> Result<Value> {
-    let samples = load_iq(path)?;
-    let mut report = analyze_samples(&samples, sample_rate)?;
+    let loaded = load_iq(path)?;
+    let effective_rate = sample_rate.or(loaded.inferred_sample_rate);
+    let mut report = analyze_samples(&loaded.samples, effective_rate)?;
     report["input"]["name"] = json!(path.file_name().unwrap_or_default().to_string_lossy());
+    report["input"]["format"] = json!(loaded.format_name);
     report["input"]["sha256"] = json!(sha256_file(path)?);
     Ok(report)
 }
@@ -807,6 +1084,45 @@ mod tests {
         assert!(report["metrics"]["iq_gain_imbalance_db"].as_f64().unwrap().abs() > 3.0);
         assert!(report["metrics"]["cfar_spur_count"].as_u64().unwrap() >= 1);
         assert!(report["metrics"]["anomaly_score"].as_u64().unwrap() >= 40);
+    }
+
+    #[test]
+    fn supports_cs16_and_wav_containers() {
+        let dir = std::env::temp_dir().join(format!("iq-cs16-wav-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cs16_path = dir.join("test.cs16");
+        let mut raw = Vec::new();
+        for i in 0..128 {
+            let ang = 2.0 * PI * 10.0 * i as f64 / 128.0;
+            raw.extend_from_slice(&((ang.cos() * 20000.0) as i16).to_le_bytes());
+            raw.extend_from_slice(&((ang.sin() * 20000.0) as i16).to_le_bytes());
+        }
+        std::fs::write(&cs16_path, raw).unwrap();
+        let r1 = analyze_iq(&cs16_path, Some(128.0)).unwrap();
+        assert_eq!(r1["spectral_peaks"][0]["frequency"], 10.0);
+
+        let wav_path = dir.join("iq.wav");
+        let data_bytes: Vec<u8> = std::fs::read(&cs16_path).unwrap();
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_bytes.len() as u32).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        wav.extend_from_slice(&2u16.to_le_bytes()); // stereo
+        wav.extend_from_slice(&128u32.to_le_bytes()); // rate
+        wav.extend_from_slice(&512u32.to_le_bytes()); // byte rate
+        wav.extend_from_slice(&4u16.to_le_bytes()); // block align
+        wav.extend_from_slice(&16u16.to_le_bytes()); // bits
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(data_bytes.len() as u32).to_le_bytes());
+        wav.extend_from_slice(&data_bytes);
+        std::fs::write(&wav_path, wav).unwrap();
+
+        let r2 = analyze_iq(&wav_path, None).unwrap();
+        assert_eq!(r2["input"]["sample_rate_hz"], 128.0);
+        assert_eq!(r2["spectral_peaks"][0]["frequency"], 10.0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
