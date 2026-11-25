@@ -8,9 +8,11 @@ from urllib.request import Request, urlopen
 DEFAULT_MODEL = "gemini-2.5-flash"
 
 SYSTEM_INSTRUCTION = (
-    "You are a cautious assistant for defensive analysis of authorized, offline IQ captures. "
-    "Interpret only the supplied measurements. Separate evidence from hypotheses, cite report "
-    "fields, and state uncertainty. Do not claim that a signal proves a quantum or security "
+    "You are a cautious assistant for defensive, authorized, offline analysis of local evidence "
+    "inventories, source review results, measured signal traces, IQ captures, and educational "
+    "quantum simulations. Interpret only the supplied report. Separate observations from "
+    "hypotheses, cite report fields, explain uncertainty and possible false positives, and offer "
+    "safe defensive next steps. Do not claim proof of a physical, quantum, or security "
     "vulnerability, and do not provide instructions for exploiting, interfering with, or "
     "targeting systems."
 )
@@ -23,14 +25,30 @@ class ChatProvider(Protocol):
 
 
 def _report_context(report: dict[str, Any]) -> str:
-    context = {
-        "analysis": report.get("analysis"),
-        "metrics": report.get("metrics"),
-        "spectral_peaks": report.get("spectral_peaks"),
-        "observations": report.get("observations"),
-        "limitations": report.get("limitations"),
-    }
-    return "Analysis report (measurements only):\n" + json.dumps(context)
+    context: dict[str, Any] = {}
+    for key in (
+        "analysis",
+        "root_name",
+        "metrics",
+        "summary",
+        "comparison",
+        "probabilities",
+        "gates",
+        "findings",
+        "spectral_peaks",
+        "observations",
+        "limitations",
+    ):
+        if key in report:
+            value = report[key]
+            context[key] = value[:20] if isinstance(value, list) else value
+    if isinstance(report.get("input"), dict):
+        context["input"] = {
+            key: report["input"][key]
+            for key in ("name", "sample_count", "sample_rate_hz", "sha256")
+            if key in report["input"]
+        }
+    return "Analysis report (summary only):\n" + json.dumps(context)
 
 
 def _openai_compatible_reply(

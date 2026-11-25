@@ -12,8 +12,12 @@ import numpy as np
 
 from iqtool.analysis import analyze_iq, load_iq
 from iqtool.algorithms import analyze_samples
+from iqtool.audit import scan_source_tree
 from iqtool.cli import main
+from iqtool.forensics import create_manifest, verify_manifest
+from iqtool.physical import analyze_trace
 from iqtool.providers import _openai_compatible_reply
+from iqtool.quantum import simulate_qubit
 
 
 class IQAnalysisTests(unittest.TestCase):
@@ -151,6 +155,90 @@ class IQAnalysisTests(unittest.TestCase):
         self.assertEqual(request.full_url, "https://example.invalid/v1/chat/completions")
         self.assertEqual(request.get_header("Authorization"), "Bearer test-key")
         self.assertEqual(json.loads(request.data)["messages"], messages)
+
+    def test_evidence_manifest_detects_changed_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "evidence"
+            root.mkdir()
+            evidence = root / "note.txt"
+            evidence.write_text("original", encoding="utf-8")
+            manifest_path = Path(directory) / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(create_manifest(root)), encoding="utf-8"
+            )
+
+            unchanged = verify_manifest(root, manifest_path)
+            evidence.write_text("modified", encoding="utf-8")
+            changed = verify_manifest(root, manifest_path)
+
+        self.assertTrue(unchanged["verified"])
+        self.assertFalse(changed["verified"])
+        self.assertEqual(changed["changed"], ["note.txt"])
+
+    def test_evidence_manifest_rejects_paths_outside_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "evidence"
+            root.mkdir()
+            manifest_path = Path(directory) / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "entries": [
+                            {
+                                "path": "../outside.txt",
+                                "size_bytes": 0,
+                                "sha256": "0" * 64,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "outside the evidence root"):
+                verify_manifest(root, manifest_path)
+
+    def test_physical_trace_reports_robust_outlier_and_reference(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            trace = root / "trace.csv"
+            reference = root / "reference.csv"
+            trace.write_text("value\n0\n0\n0\n0\n0\n0\n0\n0\n0\n100\n", encoding="utf-8")
+            reference.write_text("value\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n", encoding="utf-8")
+
+            report = analyze_trace(trace, reference)
+
+        self.assertEqual(report["metrics"]["robust_outlier_count"], 1)
+        self.assertAlmostEqual(report["comparison"]["rms_ratio"], 100.0 / (10.0 ** 0.5))
+
+    def test_physical_trace_rejects_non_finite_samples(self):
+        with tempfile.TemporaryDirectory() as directory:
+            trace = Path(directory) / "trace.csv"
+            trace.write_text("0\n1\ninf\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "NaN or infinite"):
+                analyze_trace(trace)
+
+    def test_local_source_audit_reports_patterns_without_source_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "sample.py"
+            source.write_text("value = eval(user_input)\n", encoding="utf-8")
+
+            report = scan_source_tree(Path(directory))
+
+        self.assertEqual(report["metrics"]["finding_count"], 1)
+        self.assertEqual(report["findings"][0]["rule_id"], "dynamic-evaluation")
+        self.assertNotIn("eval(user_input)", json.dumps(report))
+
+    def test_quantum_simulation_applies_hadamard_and_pauli_x(self):
+        superposition = simulate_qubit(["H"])
+        flipped = simulate_qubit(["H", "X"])
+
+        self.assertAlmostEqual(superposition["probabilities"]["0"], 0.5)
+        self.assertAlmostEqual(superposition["probabilities"]["1"], 0.5)
+        self.assertAlmostEqual(flipped["probabilities"]["0"], 0.5)
+        self.assertAlmostEqual(flipped["probabilities"]["1"], 0.5)
+        self.assertEqual(flipped["gates"], ["H", "X"])
 
 
 if __name__ == "__main__":

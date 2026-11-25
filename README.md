@@ -1,9 +1,15 @@
-# IQ Research CLI
+# IQ Research Workbench
 
-A small, offline-first starting point for examining **authorized IQ recordings**.
-It computes reproducible signal measurements and can optionally explain a saved
-report through an AI provider. It does not transmit RF, interact with targets, or
-determine that a capture contains a security or quantum-mechanical vulnerability.
+An offline-first workbench for authorized IQ recordings, local evidence integrity,
+generic physical measurement traces, read-only source checks, and educational
+single-qubit simulation. Start it without arguments for a guided menu:
+
+```powershell
+.\.venv-1\Scripts\python.exe .\main.py
+```
+
+The optional AI chat explains saved reports. Reports contain measurements and
+findings only; AI does not prove a vulnerability or replace expert review.
 
 ## Project layout
 
@@ -13,8 +19,12 @@ iqtool/
   analysis.py           IQ file loading, validation, and report provenance
   algorithms/
     baseline.py         Deterministic time-domain and FFT baseline
+  audit.py              Read-only local source pattern checks
+  forensics.py          SHA-256 evidence inventory and verification
+  physical.py           Robust statistics for measurement traces
   providers.py          Gemini and OpenAI-compatible chat adapters
   cli.py                Command-line arguments and command handlers
+  quantum.py            Idealized single-qubit state-vector simulation
 tests/
   test_tool.py          Unit and CLI tests
 ```
@@ -82,16 +92,59 @@ $env:OPENAI_COMPATIBLE_API_KEY = "your-key"
 .\.venv-1\Scripts\python.exe .\main.py chat .\report.json --provider openai-compatible --model MODEL_NAME
 ```
 
-Only summary measurements from the report are sent; the original IQ file is
-not uploaded. Proprietary APIs that are not OpenAI-compatible need a provider
-adapter added by the user.
+Only selected summary fields and up to 20 findings/observations are sent; source
+contents, evidence file contents, and original signal captures are not uploaded.
+Proprietary APIs that are not OpenAI-compatible need a provider adapter added
+by the user.
+
+## Other workbench tools
+
+Create a SHA-256 inventory, then verify the evidence against it later. Save the
+manifest outside the evidence directory so it is not counted as evidence:
+
+```powershell
+.\.venv-1\Scripts\python.exe .\main.py forensic inventory .\evidence --output .\evidence-manifest.json
+.\.venv-1\Scripts\python.exe .\main.py forensic verify .\evidence .\evidence-manifest.json
+```
+
+The inventory skips `.git`, virtual environments, and Python caches. It records
+relative paths, byte sizes, and hashes; it does not establish authenticity or a
+legal chain of custody.
+
+Analyze a one-column measurement CSV or a `time,measurement` CSV. A reference is
+optional and only aggregate statistics are compared:
+
+```powershell
+.\.venv-1\Scripts\python.exe .\main.py physical .\trace.csv --reference .\reference.csv
+```
+
+Run read-only, local source-pattern checks (the code is never executed):
+
+```powershell
+.\.venv-1\Scripts\python.exe .\main.py audit .\source
+```
+
+The small static scanner flags a few common risky patterns for manual review; it
+is not a complete vulnerability scanner and can report false positives.
+
+Simulate an idealized qubit initialized in \(|0\rangle\), apply gates, and read
+the basis-state probabilities:
+
+```powershell
+.\.venv-1\Scripts\python.exe .\main.py quantum --gates H,X
+```
+
+Supported gates are `H`, `X`, `Y`, `Z`, `S`, and `T`. Optional `--theta` and
+`--phi` set the initial state angles in radians.
 
 ## Limits
 
-IQ analysis can identify measurable signal properties, not establish a
-vulnerability, infer a quantum state, or prove a security impact. Compare
-captures against a known-good reference and record instrument calibration,
-sampling configuration, and test authorization before drawing conclusions.
+These tools operate on local files and do not transmit RF, interact with devices,
+contact remote targets, execute scanned code, extract secrets, or test
+exploitability. Statistical deviations, static findings, and idealized quantum
+outputs are indicators for further authorized expert review—not proof of a
+physical, security, or quantum-mechanical vulnerability. Record instrument
+calibration, measurement conditions, and authorization before drawing conclusions.
 
 Run the local tests with:
 
