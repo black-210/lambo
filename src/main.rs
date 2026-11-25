@@ -1,6 +1,11 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use iq_research_workbench::ai::start_chat;
+use iq_research_workbench::cryptanalysis::{
+    aes_ctr_reuse, coppersmith_stub, entropy_score, frequency_analysis, rsa_factor,
+    vigenere_crack, xor_key_recovery,
+};
+use iq_research_workbench::protocol::analyze_protocol_capture;
 use iq_research_workbench::{
     AssessmentInput, analyze_iq, analyze_trace, assess_engagement, audit_to_sarif,
     create_manifest, create_scope_file, export_html_report, export_markdown_report,
@@ -11,11 +16,13 @@ use serde_json::Value;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+// ─── CLI Definition ──────────────────────────────────────────────────────────
+
 #[derive(Parser)]
 #[command(
     name = "iq-workbench",
     version,
-    about = "Authorized offline hardware red-team, IQ, physical trace, and evidence workbench"
+    about = "Authorized offline hardware red-team, IQ, physical trace, cryptanalysis, protocol, and evidence workbench"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -24,7 +31,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Analyze an IQ capture (.csv, .npy, .cf32, .cs8, .cu8) for RF impairments, spurs, and bursts
+    /// Analyze an IQ capture (.csv, .npy, .cf32, .cs8, .cu8)
     Analyze {
         iq_file: PathBuf,
         #[arg(long)]
@@ -32,7 +39,7 @@ enum Command {
         #[command(flatten)]
         output: OutputArg,
     },
-    /// Screen a physical measurement trace (.csv) for glitches, periodicity, drift, and Welch t-stat
+    /// Screen a physical measurement trace (.csv)
     Physical {
         trace: PathBuf,
         #[arg(long)]
@@ -60,18 +67,16 @@ enum Command {
         #[command(subcommand)]
         command: ScopeCommand,
     },
-    /// Run a unified hardware red-team assessment across IQ, physical trace, and source code
+    /// Run a unified hardware red-team assessment
     Assess(Box<AssessArgs>),
     /// Verify a tamper-evident SHA-256 audit ledger (.jsonl)
-    Ledger {
-        ledger: PathBuf,
-    },
-    /// Generate legal synthetic lab demo files for testing CLI & GUI
+    Ledger { ledger: PathBuf },
+    /// Generate synthetic lab demo files
     Sample {
         #[arg(long, default_value = "./demo_lab")]
         output_dir: PathBuf,
     },
-    /// Launch the local browser-based graphical workbench (bound to 127.0.0.1)
+    /// Launch the local browser-based GUI (127.0.0.1)
     Gui {
         #[arg(long, default_value_t = 8420)]
         port: u16,
@@ -89,15 +94,80 @@ enum Command {
         #[command(flatten)]
         output: OutputArg,
     },
-    /// Offline binary firmware surface inspector (entropy, magic, YARA-lite, indicators)
+    /// Offline binary firmware surface inspector
     Firmware {
-        /// Path to the firmware binary or flash image file
         firmware: PathBuf,
         #[command(flatten)]
         output: OutputArg,
     },
-    /// Discuss a saved JSON report with an optional AI provider
+    /// Discuss a saved JSON report with an AI provider
     Chat(ChatArgs),
+
+    // ── NEW ──────────────────────────────────────────────────────────────
+
+    /// Cryptanalysis research utilities (RSA, AES-CTR, Vigenère, XOR, entropy)
+    Crypto {
+        #[command(subcommand)]
+        command: CryptoCommand,
+    },
+    /// Analyze a protocol capture CSV for anomalies
+    Protocol {
+        capture: PathBuf,
+        #[command(flatten)]
+        output: OutputArg,
+    },
+}
+
+#[derive(Subcommand)]
+enum CryptoCommand {
+    /// Factor a small RSA modulus (trial-division + Pollard-Rho)
+    Rsa {
+        #[arg(long)]
+        modulus: u64,
+        #[arg(long, default_value_t = 65537)]
+        exponent: u64,
+        #[command(flatten)]
+        output: OutputArg,
+    },
+    /// Detect AES-CTR keystream reuse
+    AesCtr {
+        #[arg(long)]
+        nonce: String,
+        #[arg(long)]
+        key: String,
+        #[arg(long, num_args = 1..)]
+        ciphertexts: Vec<PathBuf>,
+        #[command(flatten)]
+        output: OutputArg,
+    },
+    /// Frequency analysis on a binary file
+    Freq {
+        file: PathBuf,
+        #[command(flatten)]
+        output: OutputArg,
+    },
+    /// Shannon entropy of a binary file
+    Entropy {
+        file: PathBuf,
+        #[command(flatten)]
+        output: OutputArg,
+    },
+    /// Crack a Vigenère cipher (uppercase A-Z text file)
+    Vigenere {
+        file: PathBuf,
+        #[arg(long, default_value_t = 20)]
+        max_key_len: usize,
+        #[command(flatten)]
+        output: OutputArg,
+    },
+    /// Recover a repeating XOR key
+    Xor {
+        file: PathBuf,
+        #[arg(long)]
+        key_len: usize,
+        #[command(flatten)]
+        output: OutputArg,
+    },
 }
 
 #[derive(Args)]
@@ -130,9 +200,7 @@ enum ScopeCommand {
         #[arg(long, default_value = "authorized-analyst")]
         operator: String,
     },
-    Verify {
-        path: PathBuf,
-    },
+    Verify { path: PathBuf },
 }
 
 #[derive(Args)]
@@ -173,6 +241,8 @@ struct ChatArgs {
     #[arg(long)]
     base_url: Option<String>,
 }
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn absolute_path(path: &Path) -> PathBuf {
     path.canonicalize()
@@ -221,6 +291,8 @@ fn read_report(path: &Path) -> Result<Value> {
     }
     Ok(report)
 }
+
+// ─── Dispatch ────────────────────────────────────────────────────────────────
 
 fn dispatch(command: Command) -> Result<()> {
     match command {
@@ -276,7 +348,10 @@ fn dispatch(command: Command) -> Result<()> {
             let report = scan_source_tree(&root)?;
             if let Some(sarif_path) = sarif.as_deref() {
                 let sarif_doc = audit_to_sarif(&report)?;
-                std::fs::write(sarif_path, format!("{}\n", serde_json::to_string_pretty(&sarif_doc)?))?;
+                std::fs::write(
+                    sarif_path,
+                    format!("{}\n", serde_json::to_string_pretty(&sarif_doc)?),
+                )?;
                 println!("SARIF report written to {}", sarif_path.display());
             }
             write_report(report, output.output.as_deref())
@@ -315,7 +390,9 @@ fn dispatch(command: Command) -> Result<()> {
             write_report(report, args.output.output.as_deref())
         }
         Command::Ledger { ledger } => write_report(verify_audit_ledger(&ledger)?, None),
-        Command::Sample { output_dir } => write_report(generate_demo_workspace(&output_dir)?, None),
+        Command::Sample { output_dir } => {
+            write_report(generate_demo_workspace(&output_dir)?, None)
+        }
         Command::Gui { port, no_open } => launch_gui(port, !no_open),
         Command::Quantum {
             gates,
@@ -329,10 +406,7 @@ fn dispatch(command: Command) -> Result<()> {
                 .filter(|gate| !gate.is_empty())
                 .map(str::to_owned)
                 .collect();
-            write_report(
-                simulate_qubit(&gates, theta, phi)?,
-                output.output.as_deref(),
-            )
+            write_report(simulate_qubit(&gates, theta, phi)?, output.output.as_deref())
         }
         Command::Chat(args) => {
             let report = read_report(&args.report)?;
@@ -346,8 +420,69 @@ fn dispatch(command: Command) -> Result<()> {
         Command::Firmware { firmware, output } => {
             write_report(inspect_firmware_binary(&firmware)?, output.output.as_deref())
         }
+
+        // ── NEW: Cryptanalysis ───────────────────────────────────────────
+        Command::Crypto { command } => match command {
+            CryptoCommand::Rsa {
+                modulus,
+                exponent,
+                output,
+            } => write_report(rsa_factor(exponent, modulus)?, output.output.as_deref()),
+            CryptoCommand::AesCtr {
+                nonce,
+                key,
+                ciphertexts,
+                output,
+            } => {
+                let mut cts: Vec<Vec<u8>> = Vec::new();
+                for p in &ciphertexts {
+                    let data = std::fs::read(p)
+                        .with_context(|| format!("reading ciphertext {}", p.display()))?;
+                    cts.push(data);
+                }
+                write_report(aes_ctr_reuse(&nonce, &key, &cts)?, output.output.as_deref())
+            }
+            CryptoCommand::Freq { file, output } => {
+                let data = std::fs::read(&file)
+                    .with_context(|| format!("reading {}", file.display()))?;
+                write_report(frequency_analysis(&data)?, output.output.as_deref())
+            }
+            CryptoCommand::Entropy { file, output } => {
+                let data = std::fs::read(&file)
+                    .with_context(|| format!("reading {}", file.display()))?;
+                write_report(entropy_score(&data)?, output.output.as_deref())
+            }
+            CryptoCommand::Vigenere {
+                file,
+                max_key_len,
+                output,
+            } => {
+                let data = std::fs::read(&file)
+                    .with_context(|| format!("reading {}", file.display()))?;
+                write_report(vigenere_crack(&data, max_key_len)?, output.output.as_deref())
+            }
+            CryptoCommand::Xor {
+                file,
+                key_len,
+                output,
+            } => {
+                let data = std::fs::read(&file)
+                    .with_context(|| format!("reading {}", file.display()))?;
+                write_report(xor_key_recovery(&data, key_len)?, output.output.as_deref())
+            }
+        },
+
+        // ── NEW: Protocol analysis ───────────────────────────────────────
+        Command::Protocol { capture, output } => {
+            write_report(
+                analyze_protocol_capture(&capture)?,
+                output.output.as_deref(),
+            )
+        }
     }
 }
+
+// ─── Interactive Menu ────────────────────────────────────────────────────────
 
 fn prompt(label: &str) -> Result<String> {
     print!("{label}");
@@ -370,6 +505,8 @@ fn menu() -> Result<()> {
              7) Ask AI about a report\n\
              8) Launch Graphical Workbench (GUI)\n\
              9) Generate demo lab dataset\n\
+             10) Cryptanalysis tools\n\
+             11) Protocol capture analysis\n\
              0) Exit"
         );
         let choice = prompt("Choose: ")?;
@@ -469,6 +606,82 @@ fn menu() -> Result<()> {
                         },
                     })
                 }
+                "10" => {
+                    println!(
+                        "\nCryptanalysis Tools:\n\
+                         a) RSA factor\n\
+                         b) Frequency analysis\n\
+                         c) Shannon entropy\n\
+                         d) Vigenère crack\n\
+                         e) XOR key recovery"
+                    );
+                    let sub = prompt("Choose (a-e): ")?;
+                    match sub.as_str() {
+                        "a" => {
+                            let n: u64 = prompt("Modulus N: ")?.parse().context("Must be a number")?;
+                            let e: u64 = prompt("Public exponent e [65537]: ")?
+                                .parse()
+                                .unwrap_or(65537);
+                            dispatch(Command::Crypto {
+                                command: CryptoCommand::Rsa {
+                                    modulus: n,
+                                    exponent: e,
+                                    output: OutputArg { output: None },
+                                },
+                            })
+                        }
+                        "b" => {
+                            let file = PathBuf::from(prompt("File path: ")?);
+                            dispatch(Command::Crypto {
+                                command: CryptoCommand::Freq {
+                                    file,
+                                    output: OutputArg { output: None },
+                                },
+                            })
+                        }
+                        "c" => {
+                            let file = PathBuf::from(prompt("File path: ")?);
+                            dispatch(Command::Crypto {
+                                command: CryptoCommand::Entropy {
+                                    file,
+                                    output: OutputArg { output: None },
+                                },
+                            })
+                        }
+                        "d" => {
+                            let file = PathBuf::from(prompt("Ciphertext file (uppercase A-Z): ")?);
+                            dispatch(Command::Crypto {
+                                command: CryptoCommand::Vigenere {
+                                    file,
+                                    max_key_len: 20,
+                                    output: OutputArg { output: None },
+                                },
+                            })
+                        }
+                        "e" => {
+                            let file = PathBuf::from(prompt("Ciphertext file: ")?);
+                            let kl: usize = prompt("Key length: ")?.parse().context("Must be a number")?;
+                            dispatch(Command::Crypto {
+                                command: CryptoCommand::Xor {
+                                    file,
+                                    key_len: kl,
+                                    output: OutputArg { output: None },
+                                },
+                            })
+                        }
+                        _ => {
+                            println!("Invalid choice.");
+                            return Ok(());
+                        }
+                    }
+                }
+                "11" => {
+                    let file = PathBuf::from(prompt("Protocol capture CSV path: ")?);
+                    dispatch(Command::Protocol {
+                        capture: file,
+                        output: OutputArg { output: None },
+                    })
+                }
                 _ => {
                     println!("Choose one of the listed options.");
                     return Ok(());
@@ -484,6 +697,8 @@ fn menu() -> Result<()> {
         }
     }
 }
+
+// ─── Entry Point ─────────────────────────────────────────────────────────────
 
 fn run() -> Result<()> {
     if std::env::args_os().len() == 1 {
