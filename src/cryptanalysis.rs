@@ -114,6 +114,7 @@ pub fn rsa_audit(e_str: &str, n_str: &str, max_steps: usize) -> Result<Value> {
             "detail": format!("RSA modulus bit length is {bits} bits; modern guidance requires >= 2048 bits.")
         }));
     }
+    
 
     Ok(json!({
         "schema_version": 2,

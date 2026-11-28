@@ -676,7 +676,25 @@ fn format_i2c_txn(bytes: &[u8], acks: &[bool]) -> Value {
         "payload_ascii": String::from_utf8_lossy(payload)
     })
 }
-
+fn format_spi_txn(bytes: &[u8]) -> Value {
+    let mut binary_str = String::new();
+    for &b in bytes {
+        for i in 0..8 {
+            binary_str.push(if (b >> (7 - i)) & 1 == 1 { '1' } else { '0' });
+        }
+        binary_str.push(' ');
+    }
+    binary_str.pop(); // Remove trailing space
+    json!({
+        "payload_hex": hex::encode(bytes),
+        "payload_ascii": String::from_utf8_lossy(bytes),
+        "payload_binary": binary_str,
+        "transaction_type": "SPI",
+        "payload_nuclear": bytes.iter().all(|&b| b == 0xFF),
+        "payload_empty": bytes.is_empty(),
+        "payload_length": bytes.len()
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;

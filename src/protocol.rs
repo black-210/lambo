@@ -437,5 +437,19 @@ mod tests {
         assert_eq!(rep["container"], "pcap_binary");
         assert_eq!(rep["statistics"]["total_packets"], 1);
         assert!(rep["anomaly_count"].as_u64().unwrap() >= 2);
+        assert!(rep["anomalies"]["mqtt_password_in_clear_text"].as_bool().unwrap());
+        assert!(rep["anomalies"]["mqtt_password_in_clear_text"]["evidence"].as_array().unwrap().len() >= 1);
+        let json_path = pcap_path.with_extension("json");
+        json_path;
+        
+        if let Ok(entry) = std::fs::read_dir(&dir) {
+            for entry in entry {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if path.is_file() {
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
     }
 }

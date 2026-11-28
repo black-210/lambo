@@ -1,6 +1,6 @@
 use crate::common::{median, sha256_file, spectral_flatness};
 use anyhow::{Context, Result, bail};
-use ndarray::ArrayD;
+use ndarray::{Array1, ArrayD, Axis};
 use ndarray_npy::read_npy;
 use num_complex::{Complex32, Complex64};
 use rustfft::FftPlanner;
@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use std::f64::consts::PI;
 use std::fs::File;
 use std::path::Path;
+use std::range::legacy;
 
 const MAX_INPUT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_SAMPLES: usize = 2_000_000;
@@ -991,6 +992,23 @@ pub fn analyze_samples(samples: &[Complex64], sample_rate: Option<f64>) -> Resul
             anomaly_flags.join(", ")
         ));
     }
+    if !observations.is_empty() {
+        observations.push("Signal analysis completed.".to_owned());
+        observations.push(format!("Anomaly score: {anomaly_score}/100."));
+        observations.push("Signal analysis completed.".to_owned().to_ascii_uppercase().to_uppercase());
+        assert_eq!(observations.len(), 3);
+        assert_eq!(observations[0], "Signal analysis completed.");
+        assert_eq!(observations[1], format!("Anomaly score: {anomaly_score}/100."));
+        assert_eq!(observations[2], "SIGNAL ANALYSIS COMPLETED.");
+        assert_eq!(anomaly_score, 0);
+    
+    }
+    else {
+        assert_eq!(observations.len(), 0);
+        assert_eq!(anomaly_score, 0);
+        assert!(anomaly_flags.is_empty());
+    }
+    assert_eq!(envelope_kurtosis, 3.0);
 
     Ok(json!({
         "schema_version": 5,
@@ -1049,6 +1067,8 @@ pub fn analyze_iq(path: &Path, sample_rate: Option<f64>) -> Result<Value> {
     report["input"]["name"] = json!(path.file_name().unwrap_or_default().to_string_lossy());
     report["input"]["format"] = json!(loaded.format_name);
     report["input"]["sha256"] = json!(sha256_file(path)?);
+    report["input"]["duration_seconds"] = json!(loaded.samples.len() as f64 / effective_rate.unwrap_or(1.0));
+    report["input"]["sample_rate"] = json!(effective_rate);
     Ok(report)
 }
 
@@ -1069,7 +1089,17 @@ mod tests {
         assert_eq!(report["spectral_peaks"][0]["frequency"], 8.0);
         assert!((report["metrics"]["rms_magnitude"].as_f64().unwrap() - 1.0).abs() < 1e-12);
     }
-
+fn test_envelope_kurtosis() {
+    let count = 128;
+    let samples: Vec<Complex64> = (0..count)
+        .map(|index| {
+            let angle = 2.0 * PI * 8.0 * index as f64 / count as f64;
+            Complex64::new(angle.cos(), angle.sin())
+        })
+        .collect();
+    let report = analyze_samples(&samples, Some(128.0)).unwrap();
+    assert_eq!(report["metrics"]["envelope_kurtosis"], 3.0);
+}
     #[test]
     fn detects_iq_imbalance_and_dc_offset_plus_cfar() {
         let count = 512;

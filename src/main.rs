@@ -21,7 +21,8 @@ use iq_research_workbench::{
 use serde_json::Value;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-
+use crate::attack::AttackAnalyzer;
+pub mod attack;
 #[derive(Parser)]
 #[command(
     name = "iq-workbench",

@@ -1,5 +1,6 @@
 use crate::common::sha256_bytes;
 use anyhow::{Context, Result, bail};
+use hex::encode_to_slice;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fs::{self, OpenOptions};
@@ -221,8 +222,8 @@ pub fn verify_audit_ledger(ledger_path: &Path) -> Result<Value> {
         expected_prev = entry.entry_hash;
         expected_seq = entry.seq + 1;
         count += 1;
+    
     }
-
     Ok(json!({
         "schema_version": 1,
         "analysis": "tamper_evident_audit_ledger_verification",

@@ -707,7 +707,6 @@ pub fn analyze_trace_matrix(csv_path: &Path, align_window: usize) -> Result<Valu
         "t_curve_preview": t_curve.iter().enumerate().step_by((num_samples / 200).max(1)).map(|(i, &t)| [i as f64, t]).collect::<Vec<_>>()
     }))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -722,6 +721,8 @@ mod tests {
         let report = analyze_trace(&path, None, 6.0).unwrap();
         fs::remove_file(&path).unwrap();
         assert_eq!(report["metrics"]["robust_outlier_count"], 1);
+        
+        
     }
 
     #[test]
